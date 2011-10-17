@@ -1048,6 +1048,7 @@ type
   public
     constructor Create;
     destructor Destroy; override;
+    procedure UpdateNames;
     procedure GroupByName(const Name: String; const riid: TIID; out ppUnk: IUnknown);
     function Group(i: Integer): TGroupImpl;
     function GetUniqueGroupName: String;
@@ -2629,11 +2630,12 @@ begin
         InitBrowsing(FBrowsePos);
         LockServerList;
         try
+          Result := E_FAIL;
           case dwBrowseDirection of
             OPC_BROWSE_UP:
             begin
               if FBrowsePos = FRootNode then
-                raise EOpcError.Create(E_FAIL);
+               Exit;
               FBrowsePos:= FBrowsePos.Parent
             end;
             OPC_BROWSE_DOWN:
@@ -4182,6 +4184,7 @@ begin
       if TServerImpl(FClientInfo).FGroupList.FindGroup(Str) then
         raise EOpcError.Create(OPC_E_DUPLICATENAME);
       FName:= Str;
+      TServerImpl(FClientInfo).FGroupList.UpdateNames;
       Result:= S_OK
     end
   except
@@ -5245,6 +5248,16 @@ begin
     raise EOpcError.Create(E_NOINTERFACE)
 end;
 
+procedure TGroupList.UpdateNames;
+var
+  i : Integer;
+begin
+  Sorted := False;
+  for i := 0 to Count-1 do
+   Strings[i] := TGroupImpl(Objects[i]).Name;
+  Sorted := True;
+end;
+
 { TAsyncTask }
 
 constructor TAsyncTask.Create(aGroup: TGroupImpl; aTransactionID: DWORD);
@@ -6059,6 +6072,4 @@ finalization
   GOpcItemServer.Free;
   GOpcItemServer:= nil
 end.
-
-
 
