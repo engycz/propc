@@ -3670,11 +3670,8 @@ begin
     MaxUpdate:= GOpcItemServer.MaxUpdateRate;
     if Value < MaxUpdate then
       Value:= MaxUpdate;
-    if SetTimer(OpcWindow, DWORD(Self), Value, nil) <> 0 then
-      Include(FGroupState, gsTimerRunning)
-    else
-      raise EOpcError.Create(E_FAIL);
-    FUpdateRate:= Value
+    FUpdateRate:= Value;
+    SetActive(FActive);
   end
 end;
 
@@ -4113,11 +4110,15 @@ begin
 end;
 
 function TGroupImpl.SetEnable(bEnable: BOOL): HResult;
+var
+  CancelID: DWORD;
 begin
   try
     CheckDeleted;
     CheckConnected;
     FDataChangeEnable:= bEnable;
+    if bEnable then
+      Refresh2(OPC_DS_CACHE, 0, CancelID);
 {$IFDEF GLD}
     if FDataChangeEnable then
       SendDebug('Set enable TRUE')
@@ -4203,7 +4204,8 @@ begin
   if Connecting then
   begin
     FDataCallback:= Sink as IOPCDataCallback;
-    Refresh2(OPC_DS_DEVICE, 0, CancelID);
+    if FDataChangeEnable then
+      Refresh2(OPC_DS_DEVICE, 0, CancelID);
   end else
   begin
     FDataCallback:= nil
@@ -4317,14 +4319,35 @@ end;
 procedure TGroupImpl.SetActive(Value: Boolean);
 var
   i: Integer;
+  CancelID: DWORD;
 begin
   if FActive <> Value then
   begin
     FActive:= Value;
     if Value then
-    for i:= 0 to FItemList.Count - 1 do
-      FItemList[i].InvalidateCache
-  end
+    begin
+      if Assigned(FDataCallback) and
+         FDataChangeEnable then
+        Refresh2(OPC_DS_CACHE, 0, CancelID) //?? DEVICE or CACHE?
+      else
+        for i:= 0 to FItemList.Count - 1 do
+          FItemList[i].InvalidateCache;
+    end;
+  end;
+
+  if Value and not (gsTimerRunning in FGroupState) then
+  begin
+    if SetTimer(OpcWindow, DWORD(Self), UpdateRate, nil) <> 0 then
+      Include(FGroupState, gsTimerRunning)
+    else
+      raise EOpcError.Create(E_FAIL);
+  end;
+
+  if not Value and (gsTimerRunning in FGroupState) then
+  begin
+    KillTimer(OpcWindow, Integer(Self));
+    Exclude(FGroupState, gsTimerRunning)
+  end;
 end;
 
 
