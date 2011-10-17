@@ -5911,11 +5911,11 @@ begin
     iid:= ItemId;
     Branch:= Self
   end;
-  if FChildren.Find(S, i) then   {cf 1.14.30}
+  if Branch.FChildren.Find(S, i) then   {cf 1.14.30}
   begin
     if not GOpcItemServer.FIgnoreDuplicatesInListItemIds then
       raise EListError.CreateResFmt(@SDuplicateItemId, [S]);
-    Result:= TNamespaceNode(FChildren.Objects[i])
+    Result:= TNamespaceNode(Branch.FChildren.Objects[i])
   end else
   begin
     Result:= TNamespaceItem.Create(Branch, iid, AccessRights, VarType)
