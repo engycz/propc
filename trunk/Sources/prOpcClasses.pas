@@ -27,13 +27,13 @@ type
   {abstract base class do not instantiate}
   TItemProperty = class(TInterfacedObject, IItemProperty)
   private
-    FPid: Integer;
+    FPid: LongWord;
   public
     constructor Create(aPid: Integer);
     function Description: string; virtual; abstract;
     function DataType: Integer; virtual; abstract;
     function GetPropertyValue: OleVariant; virtual; abstract;
-    function Pid: Integer;
+    function Pid: LongWord;
   end;
 
   TItemProperties = class(TInterfacedObject, IItemProperties)
@@ -42,7 +42,7 @@ type
   protected
   public
     function GetPropertyItem(Index: Integer): IItemProperty;
-    function GetProperty(Pid: Integer): IItemProperty;
+    function GetProperty(Pid: LongWord): IItemProperty;
     procedure Add(const ItemProperty: IItemProperty);
     function Count: Integer;
     constructor Create;
@@ -137,7 +137,7 @@ begin
   Result := IItemProperty(FList[Index]);
 end;
 
-function TItemProperties.GetProperty(Pid: Integer): IItemProperty;
+function TItemProperties.GetProperty(Pid: LongWord): IItemProperty;
 var
   i: Integer;
   Prop: IItemProperty;
@@ -246,7 +246,7 @@ end;
 
 
 
-function TItemProperty.Pid: Integer;
+function TItemProperty.Pid: LongWord;
 begin
   Result:= FPid
 end;
