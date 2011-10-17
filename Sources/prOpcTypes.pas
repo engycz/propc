@@ -138,6 +138,7 @@ begin
     VT_UI1,
     VT_UI2,
     VT_UI4,
+    VT_CY,
     VT_INT,
     VT_UINT: Result:= true;
   else
