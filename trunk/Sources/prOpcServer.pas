@@ -4227,7 +4227,8 @@ begin
   if Connecting then
   begin
     FDataCallback:= Sink as IOPCDataCallback;
-    if FDataChangeEnable then
+    if FDataChangeEnable and
+       FActive then
       Refresh2(OPC_DS_DEVICE, 0, CancelID);
   end else
   begin
