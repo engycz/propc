@@ -32,7 +32,7 @@ type
     constructor Create(aPid: Integer);
     function Description: string; virtual; abstract;
     function DataType: Integer; virtual; abstract;
-    function GetPropertyValue(var Quality: Word): OleVariant; virtual; abstract;
+    function GetPropertyValue: OleVariant; virtual; abstract;
     function Pid: Integer;
   end;
 
@@ -41,6 +41,7 @@ type
     FList: TInterfaceList;
   protected
   public
+    function GetPropertyItem(Index: Integer): IItemProperty;
     function GetProperty(Pid: Integer): IItemProperty;
     procedure Add(const ItemProperty: IItemProperty);
     function Count: Integer;
@@ -129,6 +130,11 @@ destructor TItemProperties.Destroy;
 begin
   FList.Free;
   inherited Destroy
+end;
+
+function TItemProperties.GetPropertyItem(Index: Integer): IItemProperty;
+begin
+  Result := IItemProperty(FList[Index]);
 end;
 
 function TItemProperties.GetProperty(Pid: Integer): IItemProperty;
