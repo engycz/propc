@@ -5975,6 +5975,8 @@ var
 begin
   if not GOpcItemServer.HierarchicalBrowsing then
     raise EOpcServer.CreateRes(@SCannotCallNewBranchOnFlatSpace);
+  if aName = '' then
+   raise EOpcServer.CreateResFmt(@SInvalidBranchName, [aName]);
   if FChildren.Find(aName, i) then
   begin
     Obj:= FChildren.Objects[i];
