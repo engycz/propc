@@ -1588,6 +1588,7 @@ procedure TOpcServerFactory.UpdateRegistry(Register: Boolean);
 begin
   inherited UpdateRegistry(Register);
   ComObj.CreateRegKey('AppID\'+GUIDToString(ClassID), '', Description);
+  ComObj.CreateRegKey('AppID\'+ExtractFileName(ParamStr(0)),'AppId', GUIDToString(ClassID));
   if Register then
   begin
     InstallBrowserKey;
