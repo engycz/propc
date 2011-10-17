@@ -81,12 +81,13 @@ type
   ['{12FB60B3-6B72-4CC8-91E2-9E29B1308BF0}']
     function Description: string;
     function DataType: Integer;
-    function GetPropertyValue(var Quality: Word): OleVariant;
+    function GetPropertyValue: OleVariant;
     function Pid: Integer;
   end;
 
   IItemProperties = interface
   ['{428505DD-103C-4716-AEBC-C5489ACDE49A}']
+    function GetPropertyItem(Index: Integer): IItemProperty;
     function GetProperty(Pid: Integer): IItemProperty;
     procedure Add(const ItemProperty: IItemProperty);
     function Count: Integer;
