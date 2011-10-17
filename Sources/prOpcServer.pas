@@ -2861,6 +2861,7 @@ var
   OleTime: TOleDate;
   ScanRate: Single;
   ErrorCount: Integer;
+  ItemProperty: IItemProperty;
 
 procedure DoReadValue;
 begin
@@ -2924,8 +2925,19 @@ begin
           end;
         else
           begin
-            Inc(ErrorCount);
-            ppErrors^[i]:= OPC_E_INVALID_PID;
+            ItemProperty := nil;
+            if Assigned(ItemResult.ItemProperties) then
+              ItemProperty := ItemResult.ItemProperties.GetProperty(pdwPropertyIDs^[i]);
+            if ItemProperty <> nil then
+            begin
+              ppvData^[i] := ItemProperty.GetPropertyValue;
+              VariantChangeType(ppvData^[i], ppvData^[i], 0, ItemProperty.DataType); {cf 1.11.3}
+            end
+            else
+            begin
+              Inc(ErrorCount);
+              ppErrors^[i]:= OPC_E_INVALID_PID;
+            end;
           end;
         end
       end;
@@ -3154,6 +3166,8 @@ begin
     ItemResult:= TServerItemRef.GetItem(szItemId);
     try
       pdwCount:= StdItemPropCount; {standard properties only &&&}
+      if Assigned(ItemResult.ItemProperties) then
+        pdwCount := pdwCount+Cardinal(ItemResult.ItemProperties.Count);
       ppPropertyIDs:= CheckAllocation(pdwCount*SizeOf(DWORD));
       ppDescriptions:= CheckAllocation(pdwCount*SizeOf(PWideChar));
       ppvtDataTypes:= CheckAllocation(pdwCount*SizeOf(TVarType));
@@ -3163,6 +3177,13 @@ begin
         ppDescriptions^[i]:= StringToLPOLESTR(StdItemPropDesc[i]); {check alloc &&&}
         ppvtDataTypes^[i]:= StdItemPropType[i]
       end;
+      if Assigned(ItemResult.ItemProperties) then
+        for i:= 0 to ItemResult.ItemProperties.Count-1 do
+        begin
+          ppPropertyIDs^[i+StdItemPropCount]:= ItemResult.ItemProperties.GetPropertyItem(i).Pid;
+          ppDescriptions^[i+StdItemPropCount]:= StringToLPOLESTR(ItemResult.ItemProperties.GetPropertyItem(i).Description); {check alloc &&&}
+          ppvtDataTypes^[i+StdItemPropCount]:= ItemResult.ItemProperties.GetPropertyItem(i).DataType;
+        end;
       ppvtDataTypes^[pidDataType]:= ItemResult.CanonicalDataType;
     finally
       ItemResult.ReleaseNonGroupReference
