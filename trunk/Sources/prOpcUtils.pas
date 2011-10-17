@@ -330,7 +330,7 @@ begin
       CoTaskMemFree(ppString)
     end else
     if FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM or FORMAT_MESSAGE_ARGUMENT_ARRAY,
-          nil, Code, 0, Buf, SizeOf(Buf), nil) > 0 then
+          nil, DWORD(Code), 0, Buf, SizeOf(Buf), nil) > 0 then
     begin
       Result:= Buf
     end else
