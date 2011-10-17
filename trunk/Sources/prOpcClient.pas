@@ -1681,7 +1681,7 @@ begin
   for i:= 0 to dwCount - 1 do
     PropIDs[i]:= Properties[i].ID;
   OpcCheck(Props.GetItemProperties(PWideChar(WideId),
-     dwCount, Pointer(PropIds), Data, Errors));
+     dwCount, Pointer(PropIDs), Data, Errors));
   try
     for i:= 0 to dwCount - 1 do
     with Properties[i] do
