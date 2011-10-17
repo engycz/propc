@@ -3108,7 +3108,10 @@ begin
       for i:= 0 to dwCount - 1 do
       begin
         ppszNewItemIDs^[i]:= nil; {StringToLPOLESTR('');}
-        ppErrors^[i]:= OPC_E_INVALID_PID
+        if pdwPropertyIDs^[i] <= 6 then
+         ppErrors^[i] := OPC_E_INVALID_PID
+        else
+         ppErrors^[i]:= E_FAIL;
       end
     finally
       ItemResult.ReleaseNonGroupReference
