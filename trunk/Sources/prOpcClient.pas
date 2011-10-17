@@ -475,6 +475,7 @@ end;
 
 destructor TOpcGroup.Destroy;
 begin
+  Disconnect;
   ClearUpdateList;
   FUpdateList.Free;
   FItems.Free;
@@ -841,6 +842,7 @@ begin
    Finalize(PItemInfoList(FItemInfo)^[i]);
 
   FreeMem(FItemInfo);
+  FItemInfoCount := 0;
   FItemInfo:= nil
   {cf 1.16c.1}
   {for i:= 0 to FItems.Count - 1 do
