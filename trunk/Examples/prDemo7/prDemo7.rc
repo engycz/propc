@@ -1,0 +1,14 @@
+#include "prDemo7.inc"
+
+IDD_MAIN DIALOG 33, 45, 185, 45
+STYLE DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CLASS "prDemo7"
+CAPTION "prDemo7 - Non VCL Demo"
+FONT 8, "MS Sans Serif"
+{
+ CONTROL "Close", IDCANCEL, "BUTTON", BS_PUSHBUTTON | WS_CHILD | WS_VISIBLE | WS_TABSTOP, 68, 28, 50, 14
+ CONTROL "There are 0 client(s) connected", IDC_CLIENTMSG, "static", SS_LEFT | WS_CHILD | WS_VISIBLE, 16, 4, 148, 12
+}
+
+IDI_MAIN                ICON    DISCARDABLE     "Prl.ico"
+

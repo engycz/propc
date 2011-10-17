@@ -1,0 +1,218 @@
+{------------------------------------------------------------}
+{                    prOpc Toolkit                           }
+{ Copyright (c) 2000, 2001 Production Robots Engineering Ltd }
+{ mailto: prOpcKit@prel.co.uk                                }
+{ http://www.prel.co.uk                                      }
+{------------------------------------------------------------}
+
+v1.16e Maintenance Release 08/11/07
+***********************************
+Use OPCENUM to when opening TOpcSimpleClient unless at design time.
+
+
+v1.16d Maintenance Release 08/11/07
+***********************************
+Fixed bug in handing boolean arrays in prOpcVarUtils.
+
+
+v1.16c Maintenance Release 29/09/07
+***********************************
+1.16c.1 Added new build to support "Delphi 2007 for Win32". Setup program is 
+D11Setup.exe.
+
+
+v1.16b Maintenance Release 08/04/07
+***********************************
+1.16b.1 prOpcEnum.pas
+Fixed memory leak in function OpenReg when failed to connect to remote registry.
+
+1.16b.2 prOpcEnum.pas
+Added new (optional) parameter to GetServerInfo: Options: TServerSearchOptions.
+if this includes soUseOpcEnum then the Opc enumerator service (OpcEnum.exe) is
+used to get the information, rather than remote registry access. Note that if
+this option is used, then the 'Vendor' parameter always returns empty, as this
+information is not available using OpcEnum.
+
+
+v 1.16a Maintenance Release 06/02/07
+************************************
+1.16a.1 Added basic support for Async write to SimpleClient component. Server must
+support IAsyncIO2.
+
+
+v 1.16 Upgrade Release 10/02/06
+*******************************
+Support for Delphi 2005 and Delphi 2006. The Delphi 2005 build is included for customer's
+convenience but Delphi 2005 is not an officially supported platform for prOpcKit. 
+
+
+v 1.15h Maintenance Release 30/06/05
+************************************
+1.15.1 prOpcClient.pas
+Modify 'TOpcGroup.DisconnectServer' to avoid throwing exception if connection point cannot
+be found (e.g Server has unexpectedly died).
+
+
+v 1.15g Maintenance Release 27/01/05
+************************************
+1.15.6.1    TItemIdList now ignores duplicates to allow InvalidateNamespace with
+            'keep existing'. This was a bug.
+
+1.15.6.2    Fixed AV in InvalidateNamespace
+
+
+
+v 1.15f Maintenance Release 15/06/04
+************************************
+1.15f.1 prOpcClient.pas
+Added property TOpcGroup.Timebias. This is initialised from the 
+server when the group is connected.
+
+1.15f.2
+Added property TOpcGroup.GroupInterface to allow access to underlying
+OpcInterfaces.
+
+
+v 1.15e Maintenance Release 03/04/04
+************************************
+Added "ForceDisconnect" function to Group and ClientInfo to allow 
+disfunctional clients to be disconnected from the server
+
+Fixed bug in TAsyncTask - ActiveItemList in TRefreshTask was being
+freed before the Task was processed. This was quite a nasty bug
+but there have been no reported issues from the field traceable to 
+this problem - it was detected while carrying out routine testing
+of the implementation of Forced disconnect.
+
+
+v 1.15d Maintenance Release 15/11/03
+************************************
+Minor update now includes prOpcKit.dcp in distribution.
+
+
+v 1.15c Maintenance Release 17/10/03
+************************************
+Version resource rationalised. This is now marked 1.15.3 rather 
+than 1.1.5.0 which was a bit obscure, even to me.
+
+Bug in prOpcRttiServer 
+EUInfo was returned for Boolean items which is correct for Native
+Boolean but incorrect for Variant Bool since true = -1. This was
+causing an AV in the latest release of Terravic tools - which now
+support EUInfo. Which is nice providing one does not have bugs in 
+one's implementation.
+
+Slight change to TServerSelectDlg.Execute - 'Options' parameter
+added to allow use of OpcEnum.
+
+
+v 1.15b Maintenance Release 19/03/03
+***********************************
+* Fixed bug in prOpcServer.pas. Memory Leak in IOPCAyncIO2.Refresh2.
+* Fixed broken example ClientDemo3
+
+
+v 1.15 Maintenance Release 20/09/02
+***********************************
+* Support for D7
+* Fixed broken example prDemo5
+
+
+v 1.14 Upgrade Release 14/04/02
+*******************************
+ * Detailed release notes now found in prOpcKit.doc.
+ * Added support for hierarchical browsing 
+ * Removed Rtti code from prOpcServer.pas and moved it to another unit. This 
+   will require small source code changes to servers that use Rtti.
+ * Changed TOpcSimpleClient so that Items in groups are no longer sorted by 
+   name. This was very eccentric behaviour, but the change may have an impact
+   on existing clients. See prOpcKit.doc.
+ * Added facility to allow servers to detect and act on COM errors when making
+   callbacks to clients.
+ * Minor bug fixes to prOpcServer. 
+ * Evaluation Edition no longer links Masks.dcu and ignores szFilterCriteria 
+   parameter to IOPCServerBrowseServerAddressSpace.BrowseOPCItemIDs.
+ * Includes Very Simple Client prOpcVSC.
+ * Memory leak in TOpcGroup.SyncRead (and possibly others) fixed.
+
+v 1.13a Maintenance Release 10/09/01
+************************************
+ * Fixed broken demo prDemo9. Minor updates to prOpcKit.doc and prOpcKit.hlp.
+
+v 1.13 Maintenance Release 15/08/01
+***********************************
+  * Toolkit validated with Terravic Visual OPCTest Validator.
+  * IOPCSyncIO.Read did not set the client handles in the returned structures.
+    This was quite a nasty bug and has been fixed. Fortunately, no problems have
+    been reported from this but existing servers should be updated in due course.
+  * Minor compliance changes in prOpcServer, mostly concerned with correctly
+    responding to invalid input. See prOpcServer.pas for details.
+  * Minor corrections to prOpcKit.doc
+  * There was a serious bug in prOpcServer.pas which meant that any attempt
+    to access a null string ('') using DataAccess 1.0a would result in an
+    access violation on the server.
+  * String Array items did not work on Servers compiled with Delphi 6. This was
+    caused by a bug in prOpcVarUtils, which has been fixed.
+  * Added support for Data Access 1.0 connections to servers exporting
+    array-type items.
+  * Slight change in the way strings are marshalled onto Data Access 1.0
+    streams. Previous versions included the null terminator in the byte count,
+    which was wrong. Some clients require this (incorrect) behaviour so there
+    is now a server option soIncludeNullInDA1ByteCount to force this behaviour.
+
+For more detailed information on changes and bug fixes see comments in
+prOpcServer.pas(int) and prOpcVarUtils.pas(int).
+
+v 1.12 Maintenance Release 29/06/01
+***********************************
+  * New option to force Server to always allocate ppErrors even if the
+    the result of the call is S_OK. This is a requirement of Matrikon
+    (and possibly other) clients.
+  * Now compatible with Delphi 6.0.
+  * Changes in distribution format.
+  * Minor bug fixes in prOpcServer. See prOpcServer.pas for details.
+
+v 1.11 Maintenance Release 29/05/01
+***********************************
+  * Minor bug fixes in prOpcServer. See prOpcServer.pas for details
+  * Ordering information added to documentation
+
+v 1.10 Upgrade release 30/04/2001
+*********************************
+Added features:
+
+  (TOpcItemServer)
+  * Support for Array Properties
+  * TDateTime support for Rtti Properties
+
+New unit prOpcVarUtils to provide some additional Variant
+processing routines
+
+Functional Changes
+  * Removed GetRttiProxy method. Replaced with RttiProxy property.
+  * Removed UseRecursiveRtti method. Replaced with Options method.
+  * Rtti is now scanned in virtual method LoadRttiItems.
+
+WARNING
+  * Servers implementing GetRttiProxy or UseRecursiveRtti will have
+    to be modified.
+  * Format of an RttiHandle has changed. Servers implementing
+    subscription on Rtti items may have to be modified to account
+    for the new format.
+
+No changes on client side.
+
+
+v 1.01 Maintenance Release 04/04/2001
+*************************************
+prOpcTypes.pas / int accidentally left out of distribution
+Numerous small bugfixes as listed in prOpcServer
+
+
+v 1.00 Original Release 19/03/2001
+**********************************
+
+
+
+
+
