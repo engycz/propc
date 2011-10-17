@@ -2,16 +2,12 @@ library prDemo6;
 
 uses
   ComServ,
-  OpcServerUnit in 'OpcServerUnit.pas',
-  prDemo6_TLB in 'prDemo6_TLB.pas';
-
+  OpcServerUnit in 'OpcServerUnit.pas';
 exports
   DllGetClassObject,
   DllCanUnloadNow,
   DllRegisterServer,
   DllUnregisterServer;
-
-{$R *.TLB}
 
 {$R *.RES}
 
