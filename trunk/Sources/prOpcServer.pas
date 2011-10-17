@@ -3229,8 +3229,10 @@ begin
     FGroupList.Delete(i);
     if (Group.ReferenceCount = 0) or bForce then
     begin
-      Group.FDeleted:= true; //!! To pass CT
-//      Group.Free;
+      if Group.ReferenceCount = 0 then
+       Group.Free
+      else
+       Group.FDeleted:= true;
       Result:= S_OK
     end else
     begin
