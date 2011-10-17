@@ -82,13 +82,13 @@ type
     function Description: string;
     function DataType: Integer;
     function GetPropertyValue: OleVariant;
-    function Pid: Integer;
+    function Pid: LongWord;
   end;
 
   IItemProperties = interface
   ['{428505DD-103C-4716-AEBC-C5489ACDE49A}']
     function GetPropertyItem(Index: Integer): IItemProperty;
-    function GetProperty(Pid: Integer): IItemProperty;
+    function GetProperty(Pid: LongWord): IItemProperty;
     procedure Add(const ItemProperty: IItemProperty);
     function Count: Integer;
   end;
@@ -132,6 +132,7 @@ begin
     VT_I4,
     VT_R4,
     VT_R8,
+    VT_CY,
     VT_DATE,
     VT_BSTR,
     VT_BOOL,
@@ -139,7 +140,6 @@ begin
     VT_UI1,
     VT_UI2,
     VT_UI4,
-    VT_CY,
     VT_INT,
     VT_UINT: Result:= true;
   else
