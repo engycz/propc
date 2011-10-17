@@ -1676,7 +1676,9 @@ begin
     any passed access path (and will not treat this as an error by the client)}
   ItemID:= ItemDef.szItemID;
   if ItemID = '' then
-    raise EOpcError.Create(OPC_E_INVALIDITEMID)
+    raise EOpcError.Create(OPC_E_INVALIDITEMID);
+  if not IsSupportedVarType(ItemDef.vtRequestedDataType) then
+    raise EOpcError.Create(OPC_E_BADTYPE)
 end;
 
 procedure ReadItemResult( ItemResult: TServerItemRef; var Res: OPCITEMRESULT);
