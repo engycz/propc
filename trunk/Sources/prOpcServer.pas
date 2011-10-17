@@ -420,7 +420,11 @@ type
                             ItemVarType: TVarType): Boolean; virtual;
 
     function GetServerID( Version: Integer): string; virtual;
-    {This is the bit of the ProgID after the Exe name. ClassName.Version by
+    {This is the bit of the ProgID after the <Exe name>. <GetServerVersionIndependentID>.Version by
+     default}
+
+    function GetServerVersionIndependentID: string; virtual;
+    {This is the bit of the ProgID after the Exe name. ClassName by
      default}
 
     function GetItemInfo(const ItemID: String;
@@ -1483,10 +1487,11 @@ type
   TOpcServerFactory = class(TComObjectFactory)
   private
     FVendorName: String;
+    FVersionIndependentProgID : String;
   public
     procedure UpdateRegistry(Register: Boolean); override;
     constructor Create(ComServer: TComServerObject; ComClass: TComClass;
-      const ClassID: TGUID; const ClassName, Description, VendorName: string);
+      const ClassID: TGUID; const ClassName, VersionIndependentProgID, Description, VendorName: string);
   end;
 
 procedure TOpcServerFactory.UpdateRegistry(Register: Boolean);
@@ -1590,6 +1595,7 @@ begin
   inherited UpdateRegistry(Register);
   ComObj.CreateRegKey('AppID\'+GUIDToString(ClassID), '', Description);
   ComObj.CreateRegKey('AppID\'+ExtractFileName(ParamStr(0)),'AppId', GUIDToString(ClassID));
+  ComObj.CreateRegKey('CLSID\' + GUIDToString(ClassID) + '\VersionIndependentProgID', '', ComServer.ServerName + '.' + FVersionIndependentProgID);
   if Register then
   begin
     InstallBrowserKey;
@@ -1602,11 +1608,12 @@ begin
 end;
 
 constructor TOpcServerFactory.Create(ComServer: TComServerObject; ComClass: TComClass;
-  const ClassID: TGUID; const ClassName, Description, VendorName: string);
+  const ClassID: TGUID; const ClassName, VersionIndependentProgID, Description, VendorName: string);
 begin
   inherited Create(ComServer, ComClass, ClassID, ClassName, Description,
     ciMultiInstance, tmApartment);
-  FVendorName:= VendorName
+  FVendorName:= VendorName;
+  FVersionIndependentProgID := VersionIndependentProgID;
 end;
 
 
@@ -1636,6 +1643,7 @@ begin
   TOpcServerFactory.Create(ComServer,
     TServerImpl, ServerGUID,
     aOpcItemServer.GetServerID(ServerVersion),
+    aOpcItemServer.GetServerVersionIndependentID,
     ServerDesc, ServerVendor)
 end;
 
@@ -2055,8 +2063,14 @@ end;
 
 function TOpcItemServer.GetServerID(Version: Integer): string;
 begin
-  FmtStr(Result, '%s.%d', [ClassName, Version])
+  FmtStr(Result, '%s.%d', [GetServerVersionIndependentID, Version])
 end;
+
+function TOpcItemServer.GetServerVersionIndependentID: string;
+begin
+  Result := ClassName;
+end;
+
 
 function TOpcItemServer.GetErrorString(Code: HResult; LCID: DWORD): String;
 var
