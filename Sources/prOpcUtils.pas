@@ -236,6 +236,11 @@ begin
     varError: Result:= 'Error';
     varBoolean: Result:= 'Boolean';
     varVariant: Result:= 'Variant';
+    varShortInt: Result := 'ShortInt';
+    varByte: Result := 'Byte';
+    varWord: Result := 'Word';
+    varLongWord: Result := 'LongWord';
+    varInt64: Result := 'Int64';
   else
     Result:= 'Unknown';
   end
