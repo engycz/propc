@@ -2859,6 +2859,7 @@ var
   ItemValue: OleVariant;
   OleTime: TOleDate;
   ScanRate: Single;
+  ErrorCount: Integer;
 
 procedure DoReadValue;
 begin
@@ -2880,6 +2881,7 @@ begin
     try
       ppvData:= ZeroAllocation(dwCount*SizeOf(OleVariant)); {cf 1.12.3}
       ppErrors:= CheckAllocation(dwCount*SizeOf(HRESULT));
+      ErrorCount:=0;
       ValueRead:= false;
       for i:= 0 to dwCount - 1 do
       begin
@@ -2906,7 +2908,8 @@ begin
             DoReadValue;
             FileTimeToSystemTime(ItemTimestamp, SysTime);
             SystemTimeToVariantTime(SysTime, OleTime);
-            ppvData^[i]:= OleTime
+            ppvData^[i]:= OleTime;
+            VariantChangeType(ppvData^[i], ppvData^[i], 0, VT_DATE) {cf 1.11.3}
           end;
           pidAccessRights:
           begin
@@ -2919,13 +2922,19 @@ begin
             VariantChangeType(ppvData^[i], ppvData^[i], 0, VT_R4) {cf 1.11.3}
           end;
         else
-          ppErrors^[i]:= OPC_E_INVALID_PID;
+          begin
+            Inc(ErrorCount);
+            ppErrors^[i]:= OPC_E_INVALID_PID;
+          end;
         end
       end;
     finally
       ItemResult.ReleaseNonGroupReference
     end;
-    Result:= S_OK
+    if ErrorCount = 0 then
+      Result:= S_OK
+    else
+      Result:= S_FALSE
   except
     on E: EOpcError do
     begin
