@@ -2047,7 +2047,7 @@ end;
 
 function TOpcItemServer.Options: TServerOptions;
 begin
-  Result:= []
+  Result:= [soAlwaysAllocateErrorArrays]
 end;
 
 function TOpcItemServer.GetServerID(Version: Integer): string;
