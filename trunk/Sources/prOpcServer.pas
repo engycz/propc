@@ -4663,6 +4663,8 @@ var
 begin
   if (AccessRights and OPC_WRITABLE) = 0 then  {cf 1.13.15}
     raise EOpcError.Create(OPC_E_BADRIGHTS);
+  if VarType(Value) = VT_EMPTY then
+    raise EOpcError.Create(OPC_E_BADTYPE);
   try
     if VarType(Value) = CanonicalDataType then
     begin
