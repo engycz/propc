@@ -2301,7 +2301,7 @@ var
       case BrowseType of
         OPC_BRANCH:
         if (c is TItemIdList) and
-          ItemServer.FilterFunction(FilterCriterion, [], 0, c.Name, [], 0) then
+          ItemServer.FilterFunction(FilterCriterion, Ar, 0, c.Name, [], 0) then
           FStrings.Add(c.Name);
         OPC_LEAF:
         if c is TNamespaceItem then
