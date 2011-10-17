@@ -4011,23 +4011,13 @@ procedure TGroupImpl.ItemSetDatatype(Item: TGroupItemImpl;
 var
   TypeList: PVarTypeList absolute Data;
   NewType: TVarType;
-  Value: OleVariant;
-  Quality: Word;
-  HR: HRESULT;
 begin
   NewType:= TypeList^[Index];
-  if NewType <> VT_EMPTY then
-  begin
-    Value:= GOpcItemServer.GetItemValue(Item.ServerItem.ItemHandle, Quality);
-    {attempt to coerce the value. This is not necessarily a valid
-    test for all values of ItemValue: e.g Coercion from String
-    to Integer will only work if the string is a valid number.
-    What about Locale?}
-    HR:= VariantChangeType(Value, Value, 0, NewType);
-    if HR <> S_OK then
-      raise EOpcError.Create(OPC_E_BADTYPE)
-  end;
-  Item.FRequestedDataType:= NewType
+  if not IsSupportedVarType(NewType) then
+    raise EOpcError.Create(OPC_E_BADTYPE);
+
+  Item.FRequestedDataType:= NewType;
+  Item.InvalidateCache;
 end;
 
 type
