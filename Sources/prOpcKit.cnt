@@ -1,0 +1,49 @@
+:Base prOpcKit.hlp
+:Title prOpc Toolkit for Delphi
+1 Overviews
+2 All Classes=List_Overview
+2 Hierarchical Overview=Hierarchy_Overview
+2 Unit Overview=Unit_Overview
+1 Units
+2 prOpcBrowser.pas=unit_prOpcBrowser.pas
+2 prOpcClasses.pas=unit_prOpcClasses.pas
+2 prOpcClient.pas=unit_prOpcClient.pas
+2 prOpcEnum.pas=unit_prOpcEnum.pas
+2 prOpcError.pas=unit_prOpcError.pas
+2 prOpcRttiServer.pas=unit_prOpcRttiServer.pas
+2 prOpcServer.pas=unit_prOpcServer.pas
+2 prOpcTypes.pas=unit_prOpcTypes.pas
+2 prOpcUtils.pas=unit_prOpcUtils.pas
+2 prOpcVSC.pas=unit_prOpcVSC.pas
+1 Classes
+2 EOpcClient=class__EOpcClient
+2 EOpcError=class__EOpcError
+2 EOpcServer=class__EOpcServer
+2 IEUInfo=class__IEUInfo
+2 IOpcClient=class__IOpcClient
+2 TAnalogEU=class__TAnalogEU
+2 TAnalogLimits=class__TAnalogLimits
+2 TClientInfo=class__TClientInfo
+2 TEnumeratedEU=class__TEnumeratedEU
+2 TEnumeratedEUInfoFromStrings=class__TEnumeratedEUInfoFromStrings
+2 TGroupInfo=class__TGroupInfo
+2 TGroupItemInfo=class__TGroupItemInfo
+2 TItemIDList=class__TItemIDList
+2 TNamespaceItem=class__TNamespaceItem
+2 TNamespaceNode=class__TNamespaceNode
+2 TOpcBrowser=class__TOpcBrowser
+2 TOpcGroup=class__TOpcGroup
+2 TOpcItemServer=class__TOpcItemServer
+2 TOpcPropertyView=class__TOpcPropertyView
+2 TOpcSimpleClient=class__TOpcSimpleClient
+2 TRttiItemServer=class__TRttiItemServer
+1 Routines
+2 AccessRightsToStr=gproc__AccessRightsToStr
+2 DatatypeToStr=gproc__DatatypeToStr
+2 GetOpcServers=gproc__GetOpcServers
+2 GetServerInfo=gproc__GetServerInfo
+2 OpcClient=gproc__OpcClient
+2 OpcItemServer=gproc__OpcItemServer
+2 QualityToStr=gproc__QualityToStr
+2 RegisterOPCServer=gproc__RegisterOPCServer
+2 StdOpcErrorToStr=gproc__StdOpcErrorToStr
