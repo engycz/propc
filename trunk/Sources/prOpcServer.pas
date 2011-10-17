@@ -2080,7 +2080,7 @@ begin
   if not StdOpcErrorToStr(Code, Result) then
   begin
     if  FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM or FORMAT_MESSAGE_ARGUMENT_ARRAY,
-          nil, Code, LCID and $FFFF, Buf, SizeOf(Buf), nil) > 0 then
+          nil, DWORD(Code), LCID and $FFFF, Buf, SizeOf(Buf), nil) > 0 then
       Result:= Buf
     else
       raise EOpcError.Create(E_INVALIDARG)
