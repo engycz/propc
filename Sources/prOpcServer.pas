@@ -3974,7 +3974,7 @@ begin
     What about Locale?}
     HR:= VariantChangeType(Value, Value, 0, NewType);
     if HR <> S_OK then
-      raise EOpcError.Create(HR)
+      raise EOpcError.Create(OPC_E_BADTYPE)
   end;
   Item.FRequestedDataType:= NewType
 end;
