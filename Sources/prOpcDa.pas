@@ -151,7 +151,7 @@ const
   OPC_PROP_CDT            = 1;
   OPC_PROP_VALUE          = 2;
   OPC_PROP_QUALITY        = 3;
-  OPC_PROP_time           = 4;
+  OPC_PROP_TIME           = 4;
   OPC_PROP_RIGHTS         = 5;
   OPC_PROP_SCANRATE       = 6;
 
@@ -165,13 +165,14 @@ const
   OPC_PROP_OPEN           = 107;
   OPC_PROP_TIMEZONE       = 108;
 
-  OPC_PROP_FGC            = 200;
-  OPC_PROP_BGC            = 201;
-  OPC_PROP_BLINK          = 202;
-  OPC_PROP_BMP            = 203;
-  OPC_PROP_SND            = 204;
-  OPC_PROP_HTML           = 205;
-  OPC_PROP_AVI            = 206;
+  OPC_PROP_DSP            = 200;
+  OPC_PROP_FGC            = 201;
+  OPC_PROP_BGC            = 202;
+  OPC_PROP_BLINK          = 203;
+  OPC_PROP_BMP            = 204;
+  OPC_PROP_SND            = 205;
+  OPC_PROP_HTML           = 206;
+  OPC_PROP_AVI            = 207;
 
   OPC_PROP_ALMSTAT        = 300;
   OPC_PROP_ALMHELP        = 301;
