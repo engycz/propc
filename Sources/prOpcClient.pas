@@ -99,6 +99,7 @@ type
     FServerAssignedName: string;
     FItems: TStringList;
     FItemInfo: Pointer;  {cf 1.16c.2}
+    FItemInfoCount : Word;
     FUpdateRate: Cardinal;
     FActive: Boolean;
     FPercentDeadband: Single;
@@ -394,7 +395,7 @@ type
 {I don't want to make TItemInfo public}
 function GetItemInfo(Group: TOpcGroup; i: Integer): PItemInfo;
 begin
-  if (i < 0) or (i >= Group.FItems.Count) then
+  if (i < 0) or (i >= Group.FItemInfoCount) then
     raise EStringListError.CreateResFmt(@SListIndexError, [i]);
   Result:= @(PItemInfoList(Group.FItemInfo)^[i])
 end;
@@ -628,6 +629,7 @@ begin
         NewItemInfo:= AllocMem(SizeOf(TItemInfo) * ItemCount);   {cf 1.16c.1}
         FillChar(NewItemInfo^, SizeOf(TItemInfo) * ItemCount, 0);
         FItemInfo:= NewItemInfo;
+        FItemInfoCount := ItemCount;
         for i:= 0 to ItemCount - 1 do
         begin
           // New(Info);
@@ -742,7 +744,7 @@ begin
     with FOpcGroup as IOPCGroupStateMgt do
     begin
       bActive:= FActive;
-      SetState(nil, DWORD(nil^), @bActive, nil, nil, nil, nil)
+      SetState(nil, FUpdateRate, @bActive, nil, nil, nil, nil)
     end
   end
 end;
@@ -809,7 +811,7 @@ begin
     FPercentDeadband:= Value;
     if Assigned(FOpcGroup) then
     with FOpcGroup as IOPCGroupStateMgt do
-      SetState(nil, DWORD(nil^), nil, nil, @FPercentDeadband, nil, nil)
+      SetState(nil, FUpdateRate, nil, nil, @FPercentDeadband, nil, nil)
   end
 end;
 
@@ -832,7 +834,12 @@ begin
 end;
 
 procedure TOpcGroup.FreeItemInfo;
+var
+  I : Integer;
 begin
+  for i:= 0 to FItemInfoCount - 1 do
+   Finalize(PItemInfoList(FItemInfo)^[i]);
+
   FreeMem(FItemInfo);
   FItemInfo:= nil
   {cf 1.16c.1}
