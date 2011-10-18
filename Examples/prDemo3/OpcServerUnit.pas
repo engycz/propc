@@ -76,9 +76,9 @@ end;
 procedure TDemo3.FormResize(Sender: TObject);
 begin
   if Assigned(FormWidthUpdate) then
-    FormWidthUpdate(MainForm.Width, OPC_QUALITY_GOOD);
+    FormWidthUpdate(MainForm.Width, OPC_QUALITY_GOOD, TimestampNotSet);
   if Assigned(FormHeightUpdate) then
-    FormHeightUpdate(MainForm.Height, OPC_QUALITY_GOOD)
+    FormHeightUpdate(MainForm.Height, OPC_QUALITY_GOOD, TimestampNotSet)
 end;
 
 

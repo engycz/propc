@@ -260,6 +260,7 @@ end;
 var
   StrVal: string;
 begin
+  DecimalSeparator := '.';
   if not GetNameAndValue(Text, Name, StrVal) then
     raise Exception.CreateFmt('"%s" is not valid text for a leaf', [Text]);
   _Type:= TypeFromStringValue(StrVal);
