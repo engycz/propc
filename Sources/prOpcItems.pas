@@ -2,20 +2,36 @@ unit prOpcItems;
 
 interface
 
-uses SysUtils, ActiveX, Variants,
+uses Windows, SysUtils, ActiveX, Variants,
      prOpcError, prOpcDa, prOpcTypes, prOpcClasses, prOpcServer;
 
 type
+  TVQT = record
+    Value : Variant;
+    Quality : Word;
+    Timestamp : TFileTime;
+  end;
+
   TOPCDataItem = class;
   TOPCWrite = function (Sender : TOPCDataItem; Value : OleVariant) : Boolean of object;
+  TOPCSetQuality = function (Sender : TOPCDataItem; Quality : LongWord) : Boolean of object;
+  TOPCSetTimestamp = function (Sender : TOPCDataItem; Timestamp : TFileTime) : Boolean of object;
   TOPCDataItem = class(TObject)
   private
     FValue: OleVariant;
+    FQuality : Word;
+    FTimestamp: TFileTime;
     FOnWrite: TOPCWrite;
+    FOnSetQuality: TOPCSetQuality;
+    FOnSetTimestamp: TOPCSetTimestamp;
     FQualityGood: Boolean;
-    FOPCQuality : Word;
+    DestroyScheduled: Boolean;
     procedure SetValue(const Value: OleVariant);
     procedure SetQualityGood(const Value: Boolean);
+    procedure SetQuality(const Value: Word);
+    procedure InternalSetVQT(aValue: Variant; aQuality: Word; aTimeStamp: TFileTime);
+    function GetVQT: TVQT;
+    procedure SetVQT(const Value: TVQT);
     procedure UpdateValue;
   protected
   public
@@ -23,15 +39,21 @@ type
     Units : string[255];
     FVarType: Integer;
     UpdateEvent : TSubscriptionEvent;
+    EUInfo: IEUInfo;
 
-    constructor Create(VarType : Integer; QualityGood_ : Boolean = True; Units_ : string = ''; Descr_ : string = '');
+    constructor Create(VarType : Integer; aQualityGood : Boolean = True; aUnits : string = ''; aDescr : string = '');
     procedure SafeDestroy;
     function AccessRights: TAccessRights;
+    function GetItemProperties: TItemProperties;
 
     property Value: OleVariant read FValue write SetValue;
     property QualityGood : Boolean read FQualityGood write SetQualityGood;
-    property OPCQuality : Word read FOPCQuality;
+    property Quality : Word read FQuality write SetQuality;
+    property Timestamp : TFileTime read FTimestamp;
+    property VQT : TVQT read GetVQT write SetVQT;
     property OnWrite: TOPCWrite read FOnWrite write FOnWrite;
+    property OnSetQuality: TOPCSetQuality read FOnSetQuality write FOnSetQuality;
+    property OnSetTimestamp: TOPCSetTimestamp read FOnSetTimestamp write FOnSetTimestamp;
   end;
 
   TItemPropertyStatic = class(TItemProperty)
@@ -61,20 +83,27 @@ type
     function CheckItemHandle(ItemHandle: TItemHandle) : Boolean;
     function SubscribeToItem(ItemHandle: TItemHandle; UpdateEvent: TSubscriptionEvent): Boolean; override;
     procedure UnsubscribeToItem(ItemHandle: TItemHandle); override;
-    function GetExtendedItemInfo(const ItemID: String;
-                    var AccessPath: String;
-                    var AccessRights: TAccessRights;
-                    var EUInfo: IEUInfo;
-                    var ItemProperties: IItemProperties): Integer; override;
-    function GetItemValue(ItemHandle: TItemHandle;
-                          var Quality: Word): OleVariant; override;
+    function GetExtendedItemInfo(const ItemID: String; var AccessPath: String;
+      var AccessRights: TAccessRights; var EUInfo: IEUInfo;
+      var ItemProperties: IItemProperties): Integer; override;
+    function GetItemVQT(ItemHandle: TItemHandle; var Quality: Word;
+      var Timestamp: TFileTime): OleVariant; override;
     procedure SetItemValue(ItemHandle: TItemHandle; const Value: OleVariant); override;
+    procedure SetItemQuality(ItemHandle: TItemHandle; const Quality: Word); override;
+    procedure SetItemTimestamp(ItemHandle: TItemHandle; const Timestamp: TFileTime); override;
+    procedure ItemDestroyed; virtual;
+  public
+    constructor Create;
+    destructor Destroy; override;
   end;
 
   function AddOPCItem(ItemIDList: TItemIDList; Name: string; OPCDataItem: TOPCDataItem) : TNamespaceNode;
   function CountOPCItems(ItemIDList: TItemIDList) : Integer;
 
 implementation
+
+var
+  OPCDataItemServer : TOPCDataItemServer;
 
 function AddOPCItem(ItemIDList: TItemIDList; Name: string; OPCDataItem: TOPCDataItem) : TNamespaceNode;
 begin
@@ -110,23 +139,51 @@ begin
    Result := Result + [iaWrite];
 end;
 
-constructor TOPCDataItem.Create(VarType: Integer; QualityGood_ : Boolean = True; Units_ : string = ''; Descr_ : string = '');
+function TOPCDataItem.GetItemProperties: TItemProperties;
+var
+  Limits : OleVariant;
+begin
+  Result := TItemProperties.Create;
+  Result.Add(TItemPropertyUnits.Create(Units));
+  Result.Add(TItemPropertyDescription.Create(Descr));
+  if (EUInfo <> nil) and
+     (EUInfo.EUType = euAnalog) then
+   begin
+     Limits := EUInfo.EUInfo;
+     Result.Add(TItemPropertyStatic.Create(OPC_PROPERTY_HIGH_EU, OPC_PROPERTY_DESC_HIGH_EU, Limits[0]));
+     Result.Add(TItemPropertyStatic.Create(OPC_PROPERTY_LOW_EU,  OPC_PROPERTY_DESC_LOW_EU,  Limits[1]));
+   end;
+end;
+
+constructor TOPCDataItem.Create(VarType: Integer; aQualityGood : Boolean = True; aUnits : string = ''; aDescr : string = '');
 begin
   inherited Create;
-  QualityGood := QualityGood_;
+  QualityGood := aQualityGood;
+  GetSystemTimeAsFileTime(FTimestamp);
   Self.FVarType := VarType;
   case VarType of
     varOleStr : VariantChangeType(FValue, '', 0, VarType);
     else VariantChangeType(FValue, 0, 0, VarType);
   end;
 
-  Units := Units_;
-  Descr := Descr_;
+  Units := aUnits;
+  Descr := aDescr;
 end;
 
 procedure TOPCDataItem.SafeDestroy;
 begin
-  Free;
+  OnWrite := nil;
+  OnSetQuality := nil;
+  OnSetTimestamp := nil;
+  FQuality := 0;
+  UpdateValue;
+  if not Assigned(UpdateEvent) then
+   Free
+  else
+   DestroyScheduled := True;
+
+  if Assigned(OPCDataItemServer) then
+   OPCDataItemServer.ItemDestroyed;
 end;
 
 procedure TOPCDataItem.SetQualityGood(const Value: Boolean);
@@ -136,33 +193,59 @@ begin
      FQualityGood := Value;
 
      if Value then
-      FOPCQuality := OPC_QUALITY_GOOD
+      InternalSetVQT(FValue, OPC_QUALITY_GOOD, TimestampNotSet)
      else
-      FOPCQuality := OPC_QUALITY_BAD or OPC_QUALITY_COMM_FAILURE;
-
-     UpdateValue;
+      InternalSetVQT(FValue, OPC_QUALITY_BAD or OPC_QUALITY_COMM_FAILURE, TimestampNotSet);
    end;
+end;
+
+procedure TOPCDataItem.SetQuality(const Value: Word);
+begin
+  InternalSetVQT(FValue, Value, TimestampNotSet);
+end;
+
+function TOPCDataItem.GetVQT: TVQT;
+begin
+  Result.Value := Value;
+  Result.Quality := Quality;
+  Result.Timestamp := Timestamp;
+end;
+
+procedure TOPCDataItem.SetVQT(const Value: TVQT);
+begin
+  InternalSetVQT(Value.Value, Value.Quality, Value.Timestamp);
 end;
 
 procedure TOPCDataItem.SetValue(const Value: OleVariant);
 begin
-  if FValue <> Value then
+  InternalSetVQT(Value, FQuality, TimestampNotSet);
+end;
+
+procedure TOPCDataItem.InternalSetVQT(aValue: Variant; aQuality: Word;
+  aTimeStamp: TFileTime);
+begin
+  if FValue <> aValue then
+    VariantChangeType(FValue, aValue, 0, FVarType);
+
+  if FQuality <> aQuality then
    begin
-     VariantChangeType(FValue, Value, 0, FVarType);
-     UpdateValue;
+     FQuality := aQuality;
+
+     FQualityGood := FQuality = OPC_QUALITY_GOOD;
    end;
+
+  if Int64(aTimeStamp) = Int64(TimestampNotSet) then
+   GetSystemTimeAsFileTime(FTimestamp)
+  else
+   FTimestamp := aTimestamp;
+
+  UpdateValue;
 end;
 
 procedure TOPCDataItem.UpdateValue;
 begin
   if Assigned(UpdateEvent) then
-   begin
-     if QualityGood then
-      UpdateEvent(FValue, OPC_QUALITY_GOOD)
-     else
-      UpdateEvent(FValue, OPC_QUALITY_BAD or OPC_QUALITY_COMM_FAILURE);
-   end;
-
+   UpdateEvent(FValue, FQuality, FTimestamp);
 end;
 
 { TItemPropertyStatic }
@@ -193,17 +276,29 @@ end;
 
 constructor TItemPropertyDescription.Create(Description: string);
 begin
-  inherited Create(OPC_PROP_DESC, 'Item Description', Description);
+  inherited Create(OPC_PROPERTY_DESCRIPTION, OPC_PROPERTY_DESC_DESCRIPTION, Description);
 end;
 
 { TItemPropertyUnits }
 
 constructor TItemPropertyUnits.Create(Units: string);
 begin
-  inherited Create(OPC_PROP_UNIT, 'Item Units', Units);
+  inherited Create(OPC_PROPERTY_EU_UNITS, OPC_PROPERTY_DESC_EU_UNITS, Units);
 end;
 
 { TOPCDataItemServer }
+
+constructor TOPCDataItemServer.Create;
+begin
+  inherited Create;
+  OPCDataItemServer := Self;
+end;
+
+destructor TOPCDataItemServer.Destroy;
+begin
+  OPCDataItemServer := nil;
+  inherited;
+end;
 
 function TOPCDataItemServer.Options: TServerOptions;
 begin
@@ -236,7 +331,12 @@ procedure TOPCDataItemServer.UnsubscribeToItem(ItemHandle: TItemHandle);
 begin
   if CheckItemHandle(ItemHandle) then
    begin
-     TOPCDataItem(ItemHandle).UpdateEvent := nil;//!!CS
+     with TOPCDataItem(ItemHandle) do
+      begin
+        UpdateEvent := nil;
+        if DestroyScheduled then
+         Free;
+      end;
    end;
 end;
 
@@ -257,22 +357,21 @@ begin
      OPCItem := Node.Data;
      Result := Integer(Node.Data);
      AccessRights := OPCItem.AccessRights;
-     ItemProperties := TItemProperties.Create;
-     ItemProperties.Add(TItemPropertyDescription.Create(OPCItem.Descr));
-     ItemProperties.Add(TItemPropertyUnits.Create(OPCItem.Units));
+     EUInfo := OPCItem.EUInfo;
+     ItemProperties:= OPCItem.GetItemProperties
    end
   else
    raise EOpcError.Create(OPC_E_INVALIDITEMID)
 end;
 
-function TOPCDataItemServer.GetItemValue(ItemHandle: TItemHandle;
-  var Quality: Word): OleVariant;
+function TOPCDataItemServer.GetItemVQT(ItemHandle: TItemHandle;
+  var Quality: Word; var Timestamp: TFileTime): OleVariant;
 begin
-//!! Deleted
-  if CheckItemHandle(ItemHandle) then
+ if CheckItemHandle(ItemHandle) then
    begin
      Result := TOPCDataItem(ItemHandle).Value;
-     Quality := TOPCDataItem(ItemHandle).OPCQuality;
+     Quality := TOPCDataItem(ItemHandle).Quality;
+     Timestamp := TOPCDataItem(ItemHandle).Timestamp;
    end
    else
     raise EOpcError.Create(OPC_E_INVALIDHANDLE)
@@ -286,6 +385,30 @@ begin
     TOPCDataItem(ItemHandle).OnWrite(TOPCDataItem(ItemHandle), Value)
   else
     raise EOpcError.Create(OPC_E_INVALIDHANDLE)
+end;
+
+procedure TOPCDataItemServer.SetItemQuality(ItemHandle: TItemHandle;
+  const Quality: Word);
+begin
+  if CheckItemHandle(ItemHandle) then
+   if Assigned(TOPCDataItem(ItemHandle).OnSetQuality) then
+    TOPCDataItem(ItemHandle).OnSetQuality(TOPCDataItem(ItemHandle), Quality)
+  else
+    TOPCDataItem(ItemHandle).FQuality := Quality
+end;
+
+procedure TOPCDataItemServer.SetItemTimestamp(ItemHandle: TItemHandle;
+  const Timestamp: TFileTime);
+begin
+  if CheckItemHandle(ItemHandle) then
+   if Assigned(TOPCDataItem(ItemHandle).OnSetTimestamp) then
+    TOPCDataItem(ItemHandle).OnSetTimestamp(TOPCDataItem(ItemHandle), Timestamp)
+  else
+    TOPCDataItem(ItemHandle).FTimestamp := Timestamp
+end;
+
+procedure TOPCDataItemServer.ItemDestroyed;
+begin
 end;
 
 end.

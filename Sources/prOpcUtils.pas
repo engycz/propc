@@ -40,6 +40,11 @@ procedure FreeOPCItemResultArray(dwCount: UINT; pv: POPCITEMRESULTARRAY);
 procedure FreeOPCItemAttributes(var v: OPCITEMATTRIBUTES);
 procedure FreeOPCItemAttributesArray(dwCount: UINT; pv: POPCITEMATTRIBUTESARRAY);
 
+procedure FreeOPCItemProperties(var v: OPCITEMPROPERTIES);
+
+procedure FreeOPCItemBrowseElement(v: OPCBROWSEELEMENT);
+procedure FreeOPCItemBrowseElementArray(dwCount: UINT; pv: POPCBROWSEELEMENTARRAY);
+
 procedure FreeOleVariantArray(dwCount: Integer; pv: POleVariantArray);
 
 procedure FreeResultList(pv: PResultList);
@@ -130,6 +135,48 @@ begin
   begin
     for i:= 0 to dwCount - 1 do
       FreeOPCItemAttributes(pv^[i]);
+    CoTaskMemFree(pv)
+  end
+end;
+
+procedure FreeOPCItemProperties(var v: OPCITEMPROPERTIES);
+var
+  i: Integer;
+begin
+  with v do
+  with GetMalloc do
+  begin
+    if dwNumProperties > 0 then
+      for i:= 0 to dwNumProperties - 1 do
+      begin
+        Free(pItemProperties[i].szItemID);
+        Free(pItemProperties[i].szDescription);
+        pItemProperties[i].vValue := Unassigned;
+      end;
+    Free(pItemProperties);
+  end;
+end;
+
+procedure FreeOPCItemBrowseElement(v: OPCBROWSEELEMENT);
+begin
+  with v do
+  with GetMalloc do
+  begin
+    Free(szName);
+    Free(szItemID);
+    FreeOPCItemProperties(ItemProperties);
+  end
+end;
+
+procedure FreeOPCItemBrowseElementArray(dwCount: UINT; pv: POPCBROWSEELEMENTARRAY);
+var
+  i: Integer;
+begin
+  if Assigned(pv) then
+  begin
+    if dwCount > 0 then
+      for i:= 0 to dwCount - 1 do
+        FreeOPCItemBrowseElement(pv^[i]);
     CoTaskMemFree(pv)
   end
 end;

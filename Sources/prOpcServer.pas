@@ -284,10 +284,10 @@ interface
 uses
   Windows, Messages, SysUtils, Classes, ActiveX, ComObj,
   Contnrs, {cf 1.14.16}
-  prOpcComn, prOpcDa, prOpcError, prOpcTypes;
+  prOpcComn, prOpcDa, prOpcError, prOpcTypes, prOpcUtils;
 
 type
-  TSubscriptionEvent = procedure (const Value: OleVariant; Quality: Word) of object;
+  TSubscriptionEvent = procedure (const Value: OleVariant; Quality: Word; TimeStamp: TFileTime) of object;
 
   TItemHandle = Integer;   {i.e foreign to this unit}
 
@@ -467,12 +467,18 @@ type
     {browse address space. Add all valid ItemID's to List.
     Use List.AddItemID to add the items}
 
+    function GetItemVQT(ItemHandle: TItemHandle; var Quality: Word;
+      var Timestamp: TFileTime): OleVariant; virtual;
+
     function GetItemValue(ItemHandle: TItemHandle;
-                          var Quality: Word): OleVariant; virtual; abstract;
+                          var Quality: Word): OleVariant; virtual; 
     {Note: the result is returned as a Variant. The Canonical data type of an item should not change
      during its lifetime. This is not checked}
 
+    procedure SetItemVQT(ItemHandle: TItemHandle; const ValueVQT: OPCITEMVQT); virtual;
     procedure SetItemValue(ItemHandle: TItemHandle; const Value: OleVariant); virtual; abstract;
+    procedure SetItemQuality(ItemHandle: TItemHandle; const Quality: Word); virtual;
+    procedure SetItemTimestamp(ItemHandle: TItemHandle; const Timestamp: TFileTime); virtual;
 
     procedure OnClientConnect(aServer: TClientInfo); virtual;
     procedure OnClientDisconnect(aServer: TClientInfo); virtual;
@@ -618,6 +624,7 @@ type
 
 const
   AllAccess = [iaRead, iaWrite];
+  TimestampNotSet : TFileTime = ();
 
 procedure RegisterOPCServer(const ServerGUID: TGUID;
                                ServerVersion: Integer;
@@ -756,9 +763,16 @@ type
     CanonicalDataType: TVarType;
     EUInfo: IEUInfo;
     ItemProperties: IItemProperties;
+    CacheValue: OleVariant;
+    CacheTimestamp: TFiletime;
+    CacheQuality: Word;
     AnalogType: Boolean;  {true if type is suitable for use of deadband.
                            arrays are excluded for now cf 1.14.17}
-    procedure GetItemValue(var Result: OleVariant; var Quality: Word);
+    procedure GetMaxAgeVQT(MaxAge: Cardinal; ActualTimestamp: TFileTime; var Result: OleVariant;
+      var Quality: Word; var Timestamp: TFileTime);
+    procedure GetCacheVQT(var Result: OleVariant; var Quality: Word; var Timestamp: TFileTime);
+    procedure GetItemVQT(var Result: OleVariant; var Quality: Word; var Timestamp: TFileTime);
+    procedure SetItemVQT(const ValueVQT: OPCITEMVQT);
     procedure SetItemValue(const Value: OleVariant);
     procedure AssignTo(var Result: OPCITEMATTRIBUTES);
     constructor Create(const aItemID: String);
@@ -775,7 +789,7 @@ type
     Subscribed: Boolean;
     procedure AddRef(GroupItem: TGroupItemImpl);
     procedure ReleaseRef(GroupItem: TGroupItemImpl);
-    procedure ItemCallback(const Value: OleVariant; Quality: Word);
+    procedure ItemCallback(const Value: OleVariant; Quality: Word; TimeStamp: TFileTime);
     function LockRefList: TList;
     procedure UnlockRefList;
     constructor Create(const aItemID: String;
@@ -835,6 +849,8 @@ type
     {EUType: OPCEUTYPE;  }    {not at present &&&}
     {EUInfo: OleVariant; }
     GroupItemState: TGroupItemStates; {cf 1.14.23}
+    PercentDeadband: Single;
+    PercentDeadbandSet: Boolean;
     function GetServerItem: TObject; override;
     procedure SetActive(Value: Boolean);
     constructor CreateClone(aOwner: TGroupImpl; Source: TGroupItemImpl);
@@ -842,9 +858,11 @@ type
     procedure ItemCallback(const Value: OleVariant; Quality: Word);
     procedure GetItemValue(var Result: OleVariant; var Quality: Word; var Timestamp: TFiletime);
     procedure GetCacheValue(var Result: OleVariant; var Quality: Word; var Timestamp: TFiletime);
+    procedure GetMaxAgeValue(MaxAge: Cardinal; ActualTimestamp: TFileTime; var Result: OleVariant;
+      var Quality: Word; var Timestamp: TFiletime);
     procedure InvalidateCache; {load cache from device and mark for update. This should be done
                                 when the item is activated - either at group or item level}
-    function UpdateCache(const Value: OleVariant; Quality: Word): Boolean;
+    function UpdateCache(const Value: OleVariant; Quality: Word; Timestamp: TFileTime): Boolean;
     function Tick: Boolean;  {returns true if item needs sending to client}
   public
     function Group: TGroupInfo; override;
@@ -901,6 +919,7 @@ type
    flag set so that when they are handled (destroyed) no action is taken}
   TAsyncTask = class
     Deleted: Boolean;
+    BlockProcess: Boolean;
     TransactionID: DWORD;
     Group: TGroupImpl;
     constructor Create(aGroup: TGroupImpl; aTransactionID: DWORD);
@@ -918,6 +937,16 @@ type
     destructor Destroy; override;  {cf 1.15.3}
   end;
 
+  TRefreshMaxAgeTask = class(TAsyncTask)
+    MaxAge: DWORD;
+    ActualTimestamp: TFileTime;
+    ActiveList: TList;
+    constructor Create(aGroup: TGroupImpl; aTransactionID: DWORD;
+      aMaxAge: DWORD);
+    procedure Process; override;
+    destructor Destroy; override;
+  end;
+
   TRefreshTask1 = class(TRefreshTask)
     Format: TDa1Format;
     constructor Create(aGroup: TGroupImpl; aSource: OPCDATASOURCE;
@@ -927,13 +956,31 @@ type
 
   TAsyncIOTask = class(TAsyncTask)
     GroupItem: array of TGroupItemImpl;
+    GroupItemValid: array of Boolean;
     Count: Integer;
+    ValidCount: Integer;
     constructor Create(aGroup: TGroupImpl; aTransactionID, aCount: DWORD;
-      phServer: POPCHANDLEARRAY);
+      phServer: POPCHANDLEARRAY; ppErrors: PResultList; var Result: HResult);
+    function ProcessItems(ppErrors: PResultList; var Data): HRESULT;
+    procedure ProcessItem(Item: TGroupItemImpl; IndexSrc, IndexDst: Integer;
+      var Data; var Status: HRESULT); virtual; abstract;
   end;
 
   TAsyncReadTask = class(TAsyncIOTask)
     procedure Process; override;
+    procedure ProcessItem(Item: TGroupItemImpl; IndexSrc, IndexDst: Integer;
+      var Data; var Status: HRESULT); override;
+  end;
+
+  TAsyncReadMaxAgeTask = class(TAsyncIOTask)
+    MaxAge : array of DWORD;
+    ActualTimestamp: TFileTime;
+    constructor Create(aGroup: TGroupImpl; aTransactionID, aCount: DWORD;
+      phServer: POPCHANDLEARRAY; pdwMaxAge: PDWORDARRAY; ppErrors: PResultList;
+      var Result: HResult);
+    procedure Process; override;
+    procedure ProcessItem(Item: TGroupItemImpl; IndexSrc, IndexDst: Integer;
+      var Data; var Status: HRESULT); override;
   end;
 
   TDataChangeStream = class(TMemoryStream)
@@ -966,21 +1013,39 @@ type
     function CreateStream: TDataChangeStream;
     procedure Process; override;
     constructor Create(aGroup: TGroupImpl; aCount: DWORD;
-      phServer: POPCHANDLEARRAY; aSource: OPCDATASOURCE; aFormat: TDa1Format);
+      phServer: POPCHANDLEARRAY; aSource: OPCDATASOURCE; aFormat: TDa1Format;
+      ppErrors: PResultList; var Result: HResult);
+    procedure ProcessItem(Item: TGroupItemImpl; IndexSrc, IndexDst: Integer;
+      var Data; var Status: HRESULT); override;
   end;
-
 
   TAsyncWriteTask = class(TAsyncIOTask)
     Values: TValueArray;
     constructor Create(aGroup: TGroupImpl; aTransactionID, aCount: DWORD;
-      phServer: POPCHANDLEARRAY; pValues: POleVariantArray);
+      phServer: POPCHANDLEARRAY; pValues: POleVariantArray; ppErrors: PResultList;
+      var Result: HResult);
     procedure Process; override;
+    procedure ProcessItem(Item: TGroupItemImpl; IndexSrc, IndexDst: Integer;
+      var Data; var Status: HRESULT); override;
+  end;
+
+  TAsyncWriteVQTTask = class(TAsyncIOTask)
+    Values: array of OPCITEMVQT;
+    constructor Create(aGroup: TGroupImpl; aTransactionID, aCount: DWORD;
+      phServer: POPCHANDLEARRAY; pValues: POPCITEMVQTARRAY; ppErrors: PResultList;
+      var Result: HResult);
+    procedure Process; override;
+    procedure ProcessItem(Item: TGroupItemImpl; IndexSrc, IndexDst: Integer;
+      var Data; var Status: HRESULT); override;
   end;
 
   TAsyncWriteTask1 = class(TAsyncWriteTask) {Data Access 1.0 calls}
-    procedure Process; override;
     constructor Create(aGroup: TGroupImpl; aCount: DWORD;
-      phServer: POPCHANDLEARRAY; pValues: POleVariantArray);
+      phServer: POPCHANDLEARRAY; pValues: POleVariantArray; ppErrors: PResultList;
+      var Result: HResult);
+    procedure Process; override;
+    procedure ProcessItem(Item: TGroupItemImpl; IndexSrc, IndexDst: Integer;
+      var Data; var Status: HRESULT); override;
   end;
 
   TItemAction = procedure(Item: TGroupItemImpl; Index: Integer; Data: Pointer) of object;
@@ -1063,13 +1128,16 @@ type
   TGroupState = (gsTimerRunning, gsNotified);
   TGroupStates = set of TGroupState;
 
+  TGroupKeepAlive = class;
+
   TGroupImpl = class(TGroupInfo, IUnknown, IOPCItemMgt, IOPCGroupStateMgt,
                     IOPCSyncIO,
                     {$IFNDEF FORCEDA1}
                     IConnectionPointContainer, IOPCAsyncIO2,
                     {$ENDIF}
                     IGroupItemList,
-                    {DA1 support} IDataObject, IOpcAsyncIO)
+                    {DA1 support} IDataObject, IOpcAsyncIO,
+                    {DA3 support} IOPCGroupStateMgt2, IOPCSyncIO2, IOPCAsyncIO3, IOPCItemDeadbandMgt)
   private
     ReferenceCount: Integer;
     TimeBias: Longint;
@@ -1077,6 +1145,7 @@ type
     FTaskList: TList;
     FConnectionPoint: TConnectionPoint;
     FGroupState: TGroupStates;
+    FGroupKeepAlive: TGroupKeepAlive;
     procedure SetActive(Value: Boolean);
     procedure SetUpdateRate(Value: DWORD);
     function AddOrValidate( DoAdd, BlobUpdate: Boolean;
@@ -1089,12 +1158,18 @@ type
     procedure ItemRemove(Item: TGroupItemImpl; Index: Integer; Data: Pointer);
     procedure ItemSyncIORead(Item: TGroupItemImpl; Index: Integer; Data: Pointer);
     procedure ItemSyncIOWrite(Item: TGroupItemImpl; Index: Integer; Data: Pointer);
+    procedure ItemSyncIO2Read(Item: TGroupItemImpl; Index: Integer; Data: Pointer);
+    procedure ItemSyncIO2Write(Item: TGroupItemImpl; Index: Integer; Data: Pointer);
+    procedure ItemSetDeadband(Item: TGroupItemImpl; Index: Integer; Data: Pointer);
+    procedure ItemGetDeadband(Item: TGroupItemImpl; Index: Integer; Data: Pointer);
+    procedure ItemClearDeadband(Item: TGroupItemImpl; Index: Integer; Data: Pointer);
     function IterateItems(dwCount: Integer; phServer: POPCHANDLEARRAY; Data: Pointer;
        Action: TItemAction; var ppErrors: PResultList): HRESULT;
 {    procedure ItemCallback( Item: TGroupItemImpl; const Value: OleVariant; Quality: Word);}
     procedure SinkConnect(const Sink: IUnknown; Connecting: Boolean);
     function DeleteTask(Task: TASyncTask): Boolean;
     procedure DoRefresh2( Source: OPCDATASOURCE; TransactionID: DWORD; ActiveList: TList);
+    procedure DoRefreshMaxAge(MaxAge: DWORD; ActualTimestamp: TFileTime; TransactionID: DWORD; ActiveList: TList);
     procedure DoRefresh1(Source: OPCDATASOURCE; TransactionID: DWORD;
       Format: TDa1Format; ActiveList: TList);
     function InScope(dwScope: OPCENUMSCOPE): Boolean;
@@ -1136,6 +1211,10 @@ type
     function SetName(szName: POleStr): HResult; stdcall;
     function CloneGroup(szName: POleStr; const riid: TIID; out ppUnk: IUnknown): HResult; stdcall;
 
+    { IOPCGroupStateMgt2 }
+    function SetKeepAlive(dwKeepAliveTime: DWORD; out pdwRevisedKeepAliveTime: DWORD): HResult; stdcall;
+    function GetKeepAlive(out pdwKeepAliveTime: DWORD): HResult; stdcall;
+
     { OPCSyncIO }
     function IOPCSyncIO.Read = SyncIORead;
     function SyncIORead(dwSource: OPCDATASOURCE; dwCount: DWORD; phServer: POPCHANDLEARRAY;
@@ -1143,6 +1222,17 @@ type
     function IOPCSyncIO.Write = SyncIOWrite;
     function SyncIOWrite(dwCount:DWORD; phServer:POPCHANDLEARRAY; pItemValues:POleVariantArray;
                   out ppErrors:PResultList):HResult; stdcall;
+
+    { IOPCSyncIO2 }
+    function IOPCSyncIO2.Read = SyncIORead;
+    function IOPCSyncIO2.Write = SyncIOWrite;
+    function IOPCSyncIO2.ReadMaxAge = SyncIO2ReadMaxAge;
+    function SyncIO2ReadMaxAge(dwCount: DWORD; phServer: POPCHANDLEARRAY; pdwMaxAge: PDWORDARRAY;
+                              out ppvValues: POleVariantArray; out ppwQualities: PWordArray;
+                              out ppftTimeStamps: PFileTimeArray; out ppErrors: PResultList): HResult; stdcall;
+    function IOPCSyncIO2.WriteVQT = SyncIO2WriteVQT;
+    function SyncIO2WriteVQT(dwCount: DWORD; phServer: POPCHANDLEARRAY; pItemVQT: POPCITEMVQTARRAY;
+                            out ppErrors: PResultList): HResult; stdcall;
 
     { IOPCAsyncIO2 }
     {$IFNDEF FORCEDA1}
@@ -1160,6 +1250,29 @@ type
     function Cancel2(dwCancelID: DWORD): HResult; stdcall;
     function SetEnable(bEnable: BOOL): HResult; stdcall;
     function GetEnable(out pbEnable: BOOL): HResult; stdcall;
+
+    { IOPCAsyncIO3 }
+    function IOPCAsyncIO3.ReadMaxAge = AsyncIO3ReadMaxAge;
+    function AsyncIO3ReadMaxAge(dwCount: DWORD; phServer: POPCHANDLEARRAY; pdwMaxAge: PDWORDARRAY;
+                               dwTransactionID: DWORD; out pdwCancelID: DWORD;
+                               out ppErrors: PResultList): HResult; stdcall;
+    function IOPCAsyncIO3.WriteVQT = AsyncIO3WriteVQT;
+    function AsyncIO3WriteVQT(dwCount: DWORD; phServer: POPCHANDLEARRAY; pItemVQT: POPCITEMVQTARRAY;
+                             dwTransactionID: DWORD; out pdwCancelID: DWORD;
+                             out ppErrors: PResultList): HResult; stdcall;
+    function IOPCAsyncIO3.RefreshMaxAge = AsyncIO3RefreshMaxAge;
+    function AsyncIO3RefreshMaxAge(dwMaxAge: DWORD; dwTransactionID: DWORD;
+                                  out pdwCancelID: DWORD): HResult; stdcall;
+    function IOPCAsyncIO3.Read = AsyncIO2Read;
+    function IOPCAsyncIO3.Write = AsyncIO2Write;
+
+    { IOPCItemDeadbandMgt }
+    function SetItemDeadband(dwCount: DWORD; phServer: POPCHANDLEARRAY; pPercentDeadband: PSingleArray;
+                            out ppErrors: PResultList): HResult; stdcall;
+    function GetItemDeadband(dwCount: DWORD; phServer: POPCHANDLEARRAY; out ppPercentDeadband: PSingleArray;
+                            out ppErrors: PResultList): HResult; stdcall;
+    function ClearItemDeadband(dwCount: DWORD; phServer: POPCHANDLEARRAY;
+                               out ppErrors: PResultList): HResult; stdcall;
 
     { IGroupItemList }
     function IGroupItemList.List = GetGroupItemList;
@@ -1218,6 +1331,17 @@ type
     destructor Destroy; override;
   end;
 
+  TGroupKeepAlive = class
+  private
+    Group : TGroupImpl;
+  public
+    KeepAlive: DWORD;
+    constructor Create(AGroup: TGroupImpl; AKeepAlive : DWORD);
+    destructor Destroy; override;
+    procedure RestartTimer;
+    procedure Tick;
+  end;
+
   TUnkEnumerator = class(TInterfacedObject, IEnumUnknown)
     FIndex: Integer;
     FList: TInterfaceList;
@@ -1263,7 +1387,8 @@ type
     sure I have implemented this properly &&&}
   TServerImpl = class(TClientInfo, IOPCServer, IOPCCommon,
                      IOPCBrowseServerAddressSpace,
-                     IConnectionPointContainer, IOPCItemProperties)
+                     IConnectionPointContainer, IOPCItemProperties,
+                     {DA3 support} IOPCBrowse, IOPCItemIO)
   private
     FBrowsePos: TItemIdList;
     FGroupList: TGroupList;
@@ -1351,6 +1476,24 @@ type
     function FindConnectionPoint(const iid: TIID;
       out cp: IConnectionPoint): HResult; stdcall;
 
+    { IOPCBrowse }
+    function FillProperties(szItemID: POleStr; bReturnPropertyValues: BOOL; dwPropertyCount: DWORD;
+                           pdwPropertyIDs: PDWORDARRAY; var ItemProperties: OPCITEMPROPERTIES): HResult;
+    function GetProperties(dwItemCount: DWORD; pszItemIDs: POleStrList; bReturnPropertyValues: BOOL;
+                          dwPropertyCount: DWORD; pdwPropertyIDs: PDWORDARRAY;
+                          out ppItemProperties: POPCITEMPROPERTIESARRAY): HResult; stdcall;
+    function Browse(szItemID: POleStr; var pszContinuationPoint: POleStr; dwMaxElementsReturned: DWORD;
+                   dwBrowseFilter: OPCBROWSEFILTER; szElementNameFilter: POleStr; szVendorFilter: POleStr;
+                   bReturnAllProperties: BOOL; bReturnPropertyValues: BOOL; dwPropertyCount: DWORD;
+                   pdwPropertyIDs: PDWORDARRAY; out pbMoreElements: BOOL; out pdwCount: DWORD;
+                   out ppBrowseElements: POPCBROWSEELEMENTARRAY): HResult; stdcall;
+
+    { IOPCItemIO }
+    function Read(dwCount: DWORD; pszItemIDs: POleStrList; pdwMaxAge: PDWORDARRAY;
+                 out ppvValues: POleVariantArray; out ppwQualities: PWordArray;
+                 out ppftTimeStamps: PFileTimeArray; out ppErrors: PResultList): HResult; stdcall;
+    function WriteVQT(dwCount: DWORD; pszItemIDs: POleStrList; pItemVQT: POPCITEMVQTARRAY;
+                     out ppErrors: PResultList): HResult; stdcall;
 
   public
     procedure ForceDisconnect; override;
@@ -1381,14 +1524,19 @@ const
 
   StdItemPropCount = 6;
   StdItemPropID: array[0..StdItemPropCount-1] of DWORD = (
-    1, 2, 3, 4, 5, 6);
+    OPC_PROPERTY_DATATYPE,
+    OPC_PROPERTY_VALUE,
+    OPC_PROPERTY_QUALITY,
+    OPC_PROPERTY_TIMESTAMP,
+    OPC_PROPERTY_ACCESS_RIGHTS,
+    OPC_PROPERTY_SCAN_RATE);
   StdItemPropDesc: array[0..StdItemPropCount-1] of String = (
-    'Item Canonical Data Type',
-    'Item Value',
-    'Item Quality',
-    'Item Timestamp',
-    'Item Access Rights',
-    'Item Server Scan Rate');
+    OPC_PROPERTY_DESC_DATATYPE,
+    OPC_PROPERTY_DESC_VALUE,
+    OPC_PROPERTY_DESC_QUALITY,
+    OPC_PROPERTY_DESC_TIMESTAMP,
+    OPC_PROPERTY_DESC_ACCESS_RIGHTS,
+    OPC_PROPERTY_DESC_SCAN_RATE);
   StdItemPropType: array[0..StdItemPropCount-1] of TVarType = (
     VT_I2,
     VT_VARIANT,  {dependent on item id}
@@ -1396,13 +1544,6 @@ const
     VT_DATE,
     VT_I4,
     VT_R4);
-
-  pidDataType = 1;
-  pidValue = 2;
-  pidQuality = 3;
-  pidTimestamp = 4;
-  pidAccessRights = 5;
-  pidScanRate = 6;
 
   MAX_UPDATE_RATE = 20;  {milliseconds}
 
@@ -1500,14 +1641,15 @@ procedure TOpcServerFactory.UpdateRegistry(Register: Boolean);
   var
     Cr: ICatRegister;
 {   Info: array[0..1] of TCategoryInfo; }
-    Catid: array[0..1] of TGUID;
+    Catid: array[0..2] of TGUID;
   begin
     CoInitialize(nil);
     OleCheck(CoCreateInstance(CLSID_StdComponentCategoryMgr, nil,
         CLSCTX_INPROC_SERVER, ICatRegister, Cr));
-    Catid[0]:= CATID_OPCDAServer20;
-    Catid[1]:= CATID_OPCDAServer10;
-    Cr.UnRegisterClassImplCategories(ClassID, 2, @Catid);
+    Catid[0]:= CATID_OPCDAServer30;
+    Catid[1]:= CATID_OPCDAServer20;
+    Catid[2]:= CATID_OPCDAServer10;
+    Cr.UnRegisterClassImplCategories(ClassID, 3, @Catid);
     {ignore the error if this fails. It probably just means that categories
     are already unregistered}
 
@@ -1546,28 +1688,35 @@ procedure TOpcServerFactory.UpdateRegistry(Register: Boolean);
   procedure InstallBrowserKey;
   var
     Cr: ICatRegister;
-    Info: array[0..1] of TCategoryInfo;
-    Catid: array[0..1] of TGUID;
+    Info: array[0..2] of TCategoryInfo;
+    Catid: array[0..2] of TGUID;
   begin
     CoInitialize(nil);
     OleCheck(CoCreateInstance(CLSID_StdComponentCategoryMgr, nil,
         CLSCTX_INPROC_SERVER, ICatRegister, Cr));
     with Info[0] do
     begin
+      catid:= CATID_OPCDAServer30;
+      lcid:= GetUserDefaultLCID;
+      StringToWideChar(CATID_OPCDAServer30Desc, szDescription, Length(szDescription)-1)
+    end;
+    with Info[1] do
+    begin
       catid:= CATID_OPCDAServer20;
       lcid:= GetUserDefaultLCID;
       StringToWideChar(CATID_OPCDAServer20Desc, szDescription, Length(szDescription)-1)
     end;
-    with Info[1] do
+    with Info[2] do
     begin
       catid:= CATID_OPCDAServer10;
       lcid:= GetUserDefaultLCID;
       StringToWideChar(CATID_OPCDAServer10Desc, szDescription, Length(szDescription)-1)
     end;
-    OleCheck(Cr.RegisterCategories(2, @Info));
-    Catid[0]:= CATID_OPCDAServer20;
-    Catid[1]:= CATID_OPCDAServer10;
-    OleCheck(Cr.RegisterClassImplCategories(ClassID, 2, @Catid))
+    OleCheck(Cr.RegisterCategories(3, @Info));
+    Catid[0]:= CATID_OPCDAServer30;
+    Catid[1]:= CATID_OPCDAServer20;
+    Catid[2]:= CATID_OPCDAServer10;
+    OleCheck(Cr.RegisterClassImplCategories(ClassID, 3, @Catid))
   end;
 
   procedure InstallDA1BrowserKey;
@@ -1624,6 +1773,7 @@ procedure RegisterOPCServer(const ServerGUID: TGUID;
                               aOpcItemServer: TOpcItemServer);
 var
   i: TDa1Format;
+  aServerDesc: string;
 begin
   for i:= Low(TDa1Format) to High(TDa1Format) do
   begin
@@ -1639,12 +1789,16 @@ begin
   GStrictHandles:= soStrictHandleValidation in aOpcItemServer.Options; {cf 1.14.10}
   GHierarchical:= soHierarchicalBrowsing in aOpcItemServer.Options; {cf 1.14.18}
 *)
-  aOpcItemServer.FVendorInfo:= ServerVendor + ' ' + ServerDesc;
+  if ServerDesc <> '' then
+    aServerDesc:= ServerDesc
+  else
+    aServerDesc:= ComServer.ServerName;
+  aOpcItemServer.FVendorInfo:= ServerVendor + ' ' + aServerDesc;
   TOpcServerFactory.Create(ComServer,
     TServerImpl, ServerGUID,
     aOpcItemServer.GetServerID(ServerVersion),
     aOpcItemServer.GetServerVersionIndependentID,
-    ServerDesc, ServerVendor)
+    aServerDesc, ServerVendor)
 end;
 
 procedure CheckCount(dwCount: DWORD; InputArray: Pointer);
@@ -1712,8 +1866,10 @@ const
 
 function OpcWndProc(Window: HWND; Message, wParam, lParam: Longint): Longint; stdcall;
 var
+  Obj: TObject absolute wParam;
   Task: TAsyncTask absolute wParam;
   Group: TGroupImpl absolute wParam;
+  KeepAlive: TGroupKeepAlive absolute wParam;
 begin
   try
     case Message of
@@ -1743,7 +1899,10 @@ begin
       end;
       WM_TIMER:
       begin
-        Group.Tick;
+        if Obj is TGroupImpl then
+          Group.Tick;
+        if Obj is TGroupKeepAlive then
+          KeepAlive.Tick;
         Result:= 0
       end
     else
@@ -2053,6 +2212,38 @@ begin
 end;
 
 procedure TOpcItemServer.ListItemIDs(List: TItemIDList);
+begin
+end;
+
+function TOpcItemServer.GetItemVQT(ItemHandle: TItemHandle;
+  var Quality: Word; var Timestamp: TFileTime): OleVariant;
+begin
+  GOpcItemServer.GetTimestamp(Timestamp);
+  Result := GetItemValue(ItemHandle, Quality);
+end;
+
+function TOpcItemServer.GetItemValue(ItemHandle: TItemHandle;
+  var Quality: Word): OleVariant;
+begin
+  raise Exception.Create('Called abstract method TOpcItemServer.GetItemValue');
+end;
+
+procedure TOpcItemServer.SetItemVQT(ItemHandle: TItemHandle; const ValueVQT: OPCITEMVQT);
+begin
+  SetItemValue(ItemHandle, ValueVQT.vDataValue);
+
+  if ValueVQT.bQualitySpecified then
+   SetItemQuality(ItemHandle, ValueVQT.wQuality);
+
+  if ValueVQT.bTimeStampSpecified then
+   SetItemTimestamp(ItemHandle, ValueVQT.ftTimeStamp);
+end;
+
+procedure TOpcItemServer.SetItemQuality(ItemHandle: TItemHandle; const Quality: Word);
+begin
+end;
+
+procedure TOpcItemServer.SetItemTimestamp(ItemHandle: TItemHandle; const Timestamp: TFileTime);
 begin
 end;
 
@@ -2754,6 +2945,418 @@ begin
   end
 end;
 
+function TServerImpl.FillProperties(
+            szItemID: POleStr;
+            bReturnPropertyValues:      BOOL;
+            dwPropertyCount:            DWORD;
+            pdwPropertyIDs:             PDWORDARRAY;
+      var   ItemProperties:             OPCITEMPROPERTIES): HResult;
+var
+  I: Integer;
+  ItemResult: TServerItemRef;
+  ValueRead: Boolean;
+  ItemQuality: Word;
+  SysTime: TSystemTime;
+  ItemTimestamp: TFiletime;
+  ItemValue: OleVariant;
+  OleTime: TOleDate;
+  IsError: Boolean;
+  PropertyID: LongWord;
+  ListProperties: Boolean;
+  ItemProperty: IItemProperty;
+
+procedure DoReadValue;
+begin
+  if not ValueRead then
+  begin
+    ItemQuality:= OPC_QUALITY_GOOD;
+    ItemValue:= GOpcItemServer.GetItemVQT(ItemResult.ItemHandle, ItemQuality, ItemTimestamp);
+    ValueRead:= true
+  end
+end;
+
+begin
+  try
+    IsError := False;
+    if dwPropertyCount = 0 then
+      ListProperties := True
+    else
+      ListProperties := False;
+
+    try
+      ItemResult:= TServerItemRef.GetItem(szItemID);
+      try
+        ValueRead:= false;
+        if ListProperties then
+        begin
+          dwPropertyCount := StdItemPropCount;
+          if Assigned(ItemResult.ItemProperties) then
+            dwPropertyCount := dwPropertyCount + Cardinal(ItemResult.ItemProperties.Count);
+        end;
+
+        ItemProperties.hrErrorID := S_OK;
+        ItemProperties.dwNumProperties := dwPropertyCount;
+        ItemProperties.pItemProperties := ZeroAllocation(dwPropertyCount*SizeOf(OPCITEMPROPERTY));
+        for I := 0 to dwPropertyCount-1 do
+        begin
+          if not ListProperties then
+            PropertyID := pdwPropertyIDs^[I]
+          else
+            begin
+              if I < StdItemPropCount then
+                PropertyID := StdItemPropID[I]
+              else
+                PropertyID := ItemResult.ItemProperties.GetPropertyItem(I - StdItemPropCount).Pid
+            end;
+          ItemProperties.pItemProperties^[I].hrErrorID := S_OK;
+          ItemProperties.pItemProperties^[I].dwPropertyID := PropertyID;
+          ItemProperties.pItemProperties^[I].szItemID := nil;
+          case PropertyID of
+            OPC_PROPERTY_DATATYPE:
+            begin
+              ItemProperties.pItemProperties^[I].vtDataType := VT_I2;
+              ItemProperties.pItemProperties^[I].szDescription := StringToLPOLESTR(OPC_PROPERTY_DESC_DATATYPE);
+              if bReturnPropertyValues then
+               begin
+                 ItemProperties.pItemProperties^[I].vValue := ItemResult.CanonicalDataType;
+                 VariantChangeType(ItemProperties.pItemProperties^[I].vValue, ItemProperties.pItemProperties^[I].vValue, 0, VT_I2);
+               end;
+            end;
+            OPC_PROPERTY_VALUE:
+            begin
+              DoReadValue;
+              ItemProperties.pItemProperties^[I].vtDataType := VT_VARIANT;
+              ItemProperties.pItemProperties^[I].szDescription := StringToLPOLESTR(OPC_PROPERTY_DESC_VALUE);
+              if bReturnPropertyValues then
+               ItemProperties.pItemProperties^[I].vValue := ItemValue
+            end;
+            OPC_PROPERTY_QUALITY:
+            begin
+              ItemProperties.pItemProperties^[I].vtDataType := VT_I2;
+              ItemProperties.pItemProperties^[I].szDescription := StringToLPOLESTR(OPC_PROPERTY_DESC_QUALITY);
+              if bReturnPropertyValues then
+               begin
+                 DoReadValue;
+                 ItemProperties.pItemProperties^[I].vValue := ItemQuality;
+                 VariantChangeType(ItemProperties.pItemProperties^[I].vValue, ItemProperties.pItemProperties^[I].vValue, 0, VT_I2);
+               end;
+            end;
+            OPC_PROPERTY_TIMESTAMP:
+            begin
+              ItemProperties.pItemProperties^[I].vtDataType := VT_DATE;
+              ItemProperties.pItemProperties^[I].szDescription := StringToLPOLESTR(OPC_PROPERTY_DESC_TIMESTAMP);
+              if bReturnPropertyValues then
+               begin
+                 DoReadValue;
+                 FileTimeToSystemTime(ItemTimestamp, SysTime);
+                 SystemTimeToVariantTime(SysTime, OleTime);
+                 ItemProperties.pItemProperties^[I].vValue := OleTime;
+                 VariantChangeType(ItemProperties.pItemProperties^[I].vValue, ItemProperties.pItemProperties^[I].vValue, 0, VT_DATE);
+               end;
+            end;
+            OPC_PROPERTY_ACCESS_RIGHTS:
+            begin
+              ItemProperties.pItemProperties^[I].vtDataType := VT_I4;
+              ItemProperties.pItemProperties^[I].szDescription := StringToLPOLESTR(OPC_PROPERTY_DESC_ACCESS_RIGHTS);
+              if bReturnPropertyValues then
+               ItemProperties.pItemProperties^[I].vValue := Integer(ItemResult.AccessRights);
+            end;
+            OPC_PROPERTY_SCAN_RATE:
+            begin
+              ItemProperties.pItemProperties^[I].vtDataType := VT_R4;
+              ItemProperties.pItemProperties^[I].szDescription := StringToLPOLESTR(OPC_PROPERTY_DESC_SCAN_RATE);
+              if bReturnPropertyValues then
+               begin
+                 ItemProperties.pItemProperties^[I].vValue := GOpcItemServer.MaxUpdateRate;
+                 VariantChangeType(ItemProperties.pItemProperties^[I].vValue, ItemProperties.pItemProperties^[I].vValue, 0, VT_R4);
+               end;
+            end;
+          else
+            begin
+              ItemProperty := nil;
+              if Assigned(ItemResult.ItemProperties) then
+                ItemProperty := ItemResult.ItemProperties.GetProperty(PropertyID);
+              if ItemProperty <> nil then
+              begin
+                ItemProperties.pItemProperties^[I].vtDataType := ItemProperty.DataType;
+                ItemProperties.pItemProperties^[I].szDescription := StringToLPOLESTR(ItemProperty.Description);
+                if bReturnPropertyValues then
+                begin
+                  ItemProperties.pItemProperties^[I].vValue := ItemProperty.GetPropertyValue;
+                  VariantChangeType(ItemProperties.pItemProperties^[I].vValue, ItemProperties.pItemProperties^[I].vValue, 0, ItemProperty.DataType);
+                end;
+              end else
+              begin
+                ItemProperties.hrErrorID := S_FALSE;
+                ItemProperties.pItemProperties^[I].hrErrorID := OPC_E_INVALID_PID;
+                IsError := True;
+              end;
+            end;
+          end
+        end;
+      finally
+        ItemResult.ReleaseNonGroupReference;
+      end;
+    except
+      on E: EOpcError do
+      begin
+        ItemProperties.hrErrorID := E.ErrorCode;
+        IsError := True;
+      end;
+    end;
+
+    if not IsError then
+      Result := S_OK
+    else
+      Result := S_FALSE;
+  except
+    on E: EOpcError do
+    begin
+      Result:= E.ErrorCode;
+    end
+  end;
+end;
+
+function TServerImpl.GetProperties(
+            dwItemCount:                DWORD;
+            pszItemIDs:                 POleStrList;
+            bReturnPropertyValues:      BOOL;
+            dwPropertyCount:            DWORD;
+            pdwPropertyIDs:             PDWORDARRAY;
+      out   ppItemProperties:           POPCITEMPROPERTIESARRAY): HResult;
+var
+  I: Integer;
+  IsError: Boolean;
+begin
+  try
+    ppItemProperties := nil;
+    IsError := False;
+
+    CheckCount(dwItemCount, pszItemIDs);
+
+    ppItemProperties := ZeroAllocation(dwItemCount*SizeOf(OPCITEMPROPERTIES));
+    for I := 0 to dwItemCount-1 do
+    begin
+      if FillProperties(pszItemIDs[I], bReturnPropertyValues, dwPropertyCount, pdwPropertyIDs, ppItemProperties^[I]) <> S_OK then
+        IsError := True;
+    end;
+
+    if not IsError then
+      Result := S_OK
+    else
+      Result := S_FALSE;
+  except
+    on E: EOpcError do
+    begin
+      Result:= E.ErrorCode;
+    end
+  end;
+end;
+
+function TServerImpl.Browse(
+            szItemID:                   POleStr;
+      var   pszContinuationPoint:       POleStr;
+            dwMaxElementsReturned:      DWORD;
+            dwBrowseFilter:             OPCBROWSEFILTER;
+            szElementNameFilter:        POleStr;
+            szVendorFilter:             POleStr;
+            bReturnAllProperties:       BOOL;
+            bReturnPropertyValues:      BOOL;
+            dwPropertyCount:            DWORD;
+            pdwPropertyIDs:             PDWORDARRAY;
+      out   pbMoreElements:             BOOL;
+      out   pdwCount:                   DWORD;
+      out   ppBrowseElements:           POPCBROWSEELEMENTARRAY): HResult; stdcall;
+var
+  I : Integer;
+  StartI, Index : LongWord;
+  List : TItemIdList;
+  NSNode : TNamespaceNode;
+function FilterNameSpaceNode(NameSpaceNode: TNamespaceNode; ElementNameFilter: string; BrowseFilter: DWORD) : Boolean;
+begin
+  Result := False;
+  if (ElementNameFilter = '') or
+     GOpcItemServer.FilterFunction(ElementNameFilter, [], 0, NameSpaceNode.Name, [], 0) then
+  begin
+    if (BrowseFilter in [OPC_BROWSE_FILTER_ALL, OPC_BROWSE_FILTER_BRANCHES]) and
+       (NameSpaceNode is TItemIdList) or
+       (BrowseFilter in [OPC_BROWSE_FILTER_ALL, OPC_BROWSE_FILTER_ITEMS]) and
+       (NameSpaceNode is TNamespaceItem) then
+      Result := True;
+  end;
+end;
+
+begin
+  Result := S_OK;
+
+  pbMoreElements := False;
+  List := nil;
+  try
+    TestParamRange(dwBrowseFilter, OPC_BROWSE_FILTER_ALL, OPC_BROWSE_FILTER_ITEMS);
+    try
+      if pszContinuationPoint^ <> #0 then
+      begin
+        StartI := StrToInt(pszContinuationPoint);
+        FreeAndNull(pszContinuationPoint);
+        pszContinuationPoint := StringToLPOLESTR('');
+      end else
+        StartI := 0;
+    except
+      raise EOpcError.Create(OPC_E_INVALIDCONTINUATIONPOINT);
+    end;
+
+    if szItemID^ = #0 then
+     List := GOpcItemServer.FRootNode
+    else
+     begin
+       NSNode := GOpcItemServer.FRootNode.Find(szItemID);
+       if NSNode = nil then
+         raise EOpcError.Create(OPC_E_UNKNOWNITEMID);
+       if NSNode is TItemIdList then
+        List := TItemIdList(NSNode);
+     end;
+
+    pdwCount := 0;
+    for I := StartI to List.ChildCount - 1 do
+      if FilterNameSpaceNode(List.Child(I), szElementNameFilter, dwBrowseFilter) then
+        Inc(pdwCount);
+
+    if (dwMaxElementsReturned > 0) and (pdwCount > dwMaxElementsReturned) then
+      pdwCount := dwMaxElementsReturned;
+
+    ppBrowseElements := ZeroAllocation(pdwCount*SizeOf(OPCBROWSEELEMENT));
+
+    Index := 0;
+    for I := StartI to List.ChildCount - 1 do
+    begin
+      if FilterNameSpaceNode(List.Child(I), szElementNameFilter, dwBrowseFilter) then
+      begin
+        if Index = pdwCount then
+        begin
+          FreeAndNull(pszContinuationPoint);
+          pszContinuationPoint := StringToLPOLESTR(IntToStr(I));
+          Break;
+        end;
+
+        ppBrowseElements[Index].szName := StringToLPOLESTR(List.Child(I).Name);
+        ppBrowseElements[Index].szItemID := StringToLPOLESTR(List.Child(I).Path);
+        if List.Child(I) is TItemIDList then
+        begin
+          ppBrowseElements[Index].dwFlagValue := OPC_BROWSE_HASCHILDREN;
+          ppBrowseElements[Index].ItemProperties.hrErrorID := OPC_E_UNKNOWNITEMID;
+        end else
+        begin
+          ppBrowseElements[Index].dwFlagValue := OPC_BROWSE_ISITEM;
+          if bReturnAllProperties or (dwPropertyCount > 0) then
+            FillProperties(ppBrowseElements[Index].szItemID, bReturnPropertyValues, dwPropertyCount, pdwPropertyIDs, ppBrowseElements[Index].ItemProperties);
+        end;
+        Inc(Index);
+      end;
+    end;
+  except
+    on E: EOPCError do
+      Result := E.ErrorCode;
+  end;
+end;
+
+function TServerImpl.Read(
+            dwCount:                    DWORD;
+            pszItemIDs:                 POleStrList;
+            pdwMaxAge:                  PDWORDARRAY;
+      out   ppvValues:                  POleVariantArray;
+      out   ppwQualities:               PWordArray;
+      out   ppftTimeStamps:             PFileTimeArray;
+      out   ppErrors:                   PResultList): HResult;
+var
+  I : Integer;
+  IsError : Boolean;
+  ItemResult: TServerItemRef;
+  ItemQuality: Word;
+  ItemTimestamp: TFiletime;
+  ItemValue: OleVariant;
+  ActualTimestamp: TFileTime;
+begin
+  IsError := False;
+  try
+    CheckCount(dwCount, pszItemIDs);
+    ppvValues := ZeroAllocation(dwCount * SizeOf(OleVariant));
+    ppwQualities := ZeroAllocation(dwCount * SizeOf(Word));
+    ppftTimeStamps := ZeroAllocation(dwCount * SizeOf(TFileTime));
+    ppErrors := ZeroAllocation(dwCount * SizeOf(HRESULT));
+    GOpcItemServer.GetTimestamp(ActualTimestamp);
+    for I := 0 to dwCount - 1 do
+    try
+      ItemResult:= TServerItemRef.GetItem(pszItemIDs[I]);
+      try
+        ItemQuality:= OPC_QUALITY_GOOD;
+        ItemResult.GetMaxAgeVQT(pdwMaxAge[I], ActualTimestamp, ItemValue, ItemQuality, ItemTimestamp);
+        ppvValues[I]:= ItemValue;
+        ppwQualities[I]:= ItemQuality;
+        ppftTimeStamps[I]:= ItemTimestamp;
+      finally
+        ItemResult.ReleaseNonGroupReference
+      end;
+    except
+      on E: EOpcError do
+      begin
+        ppErrors[I]:= E.ErrorCode;
+        IsError:= True;
+      end;
+    end;
+
+    if not IsError then
+      Result:= S_OK
+    else
+      Result:= S_FALSE;
+  except
+    on E: EOpcError do
+      Result:= E.ErrorCode;
+  end;
+end;
+
+function TServerImpl.WriteVQT(
+            dwCount:                    DWORD;
+            pszItemIDs:                 POleStrList;
+            pItemVQT:                   POPCITEMVQTARRAY;
+      out   ppErrors:                   PResultList): HResult;
+var
+  IsError : Boolean;
+  I : Integer;
+  ItemResult: TServerItemRef;
+begin
+  IsError := False;
+  try
+    CheckCount(dwCount, pszItemIDs);
+    ppErrors := ZeroAllocation(dwCount * SizeOf(HRESULT));
+    for I := 0 to dwCount - 1 do
+    try
+      ItemResult:= TServerItemRef.GetItem(pszItemIDs[I]);
+      try
+        if VarType(pItemVQT[I].vDataValue) = VT_EMPTY then
+          raise EOpcError.Create(OPC_E_BADTYPE);
+
+        ItemResult.SetItemVQT(pItemVQT[I]);
+      finally
+        ItemResult.ReleaseNonGroupReference
+      end;
+    except
+      on E: EOPCError do
+      begin
+        ppErrors[I] := E.ErrorCode;
+        IsError := True;
+      end;
+    end;
+
+    if not IsError then
+      Result := S_OK
+    else
+      Result := S_FALSE;
+  except
+    on E: EOpcError do
+      Result := E.ErrorCode;
+  end;
+end;
+
 function TServerImpl.ClearBrowsingContext: String;
 begin
   if Assigned(FBrowsePos) then
@@ -2870,27 +3473,8 @@ function TServerImpl.GetItemProperties(szItemID: POleStr; dwCount: DWORD;
 var
   ItemResult: TServerItemRef;
   i: Integer;
-  ValueRead: Boolean;
-  ItemQuality: Word;
-  SysTime: TSystemTime;
-  ItemTimestamp: TFiletime;
-  ItemValue: OleVariant;
-  OleTime: TOleDate;
-  ScanRate: Single;
-  ErrorCount: Integer;
-  ItemProperty: IItemProperty;
-
-procedure DoReadValue;
-begin
-  if not ValueRead then
-  begin
-    ItemQuality:= OPC_QUALITY_GOOD;
-    GOpcItemServer.GetTimestamp(ItemTimestamp); {cf 1.14.28}
-    ItemValue:= GOpcItemServer.GetItemValue(ItemResult.ItemHandle, ItemQuality);
-    ValueRead:= true
-  end
-end;
-
+  IsError: Boolean;
+  ItemProperties: OPCITEMPROPERTIES;
 begin
   ppvData:= nil;
   ppErrors:= nil;
@@ -2900,68 +3484,22 @@ begin
     try
       ppvData:= ZeroAllocation(dwCount*SizeOf(OleVariant)); {cf 1.12.3}
       ppErrors:= CheckAllocation(dwCount*SizeOf(HRESULT));
-      ErrorCount:=0;
-      ValueRead:= false;
-      for i:= 0 to dwCount - 1 do
-      begin
-        ppErrors^[i]:= S_OK;
-        case pdwPropertyIDs^[i] of
-          pidDataType:
-          begin
-            ppvData^[i]:= ItemResult.CanonicalDataType;
-            VariantChangeType(ppvData^[i], ppvData^[i], 0, VT_I2) {cf 1.11.3}
-          end;
-          pidValue:
-          begin
-            DoReadValue;
-            ppvData^[i]:= ItemValue
-          end;
-          pidQuality:
-          begin
-            DoReadValue;
-            ppvData^[i]:= ItemQuality;
-            VariantChangeType(ppvData^[i], ppvData^[i], 0, VT_I2) {cf 1.11.3}
-          end;
-          pidTimestamp:
-          begin
-            DoReadValue;
-            FileTimeToSystemTime(ItemTimestamp, SysTime);
-            SystemTimeToVariantTime(SysTime, OleTime);
-            ppvData^[i]:= OleTime;
-            VariantChangeType(ppvData^[i], ppvData^[i], 0, VT_DATE) {cf 1.11.3}
-          end;
-          pidAccessRights:
-          begin
-            ppvData^[i]:= Integer(ItemResult.AccessRights)
-          end;
-          pidScanRate:
-          begin
-            ScanRate:= GOpcItemServer.MaxUpdateRate;
-            ppvData^[i]:= ScanRate;
-            VariantChangeType(ppvData^[i], ppvData^[i], 0, VT_R4) {cf 1.11.3}
-          end;
-        else
-          begin
-            ItemProperty := nil;
-            if Assigned(ItemResult.ItemProperties) then
-              ItemProperty := ItemResult.ItemProperties.GetProperty(pdwPropertyIDs^[i]);
-            if ItemProperty <> nil then
-            begin
-              ppvData^[i] := ItemProperty.GetPropertyValue;
-              VariantChangeType(ppvData^[i], ppvData^[i], 0, ItemProperty.DataType); {cf 1.11.3}
-            end
-            else
-            begin
-              Inc(ErrorCount);
-              ppErrors^[i]:= OPC_E_INVALID_PID;
-            end;
-          end;
-        end
+      IsError:= False;
+      if FillProperties(szItemID, True, dwCount, pdwPropertyIDs, ItemProperties) <> S_OK then
+        IsError := True;
+      try
+        for i:= 0 to dwCount - 1 do
+        begin
+          ppvData^[i]:=ItemProperties.pItemProperties[i].vValue;
+          ppErrors^[i]:=ItemProperties.pItemProperties[i].hrErrorID;
+        end;
+      finally
+        FreeOPCItemProperties(ItemProperties);
       end;
     finally
       ItemResult.ReleaseNonGroupReference
     end;
-    if ErrorCount = 0 then
+    if not IsError then
       Result:= S_OK
     else
       Result:= S_FALSE
@@ -3178,33 +3716,31 @@ function TServerImpl.QueryAvailableProperties(szItemID: POleStr;
 var
   ItemResult: TServerItemRef;
   i: Integer;
+  ItemProperties: OPCITEMPROPERTIES;
 begin
   ppPropertyIDs:= nil;
   ppDescriptions:= nil;
   ppvtDataTypes:= nil;
   try
-    ItemResult:= TServerItemRef.GetItem(szItemId);
+    ItemResult:= TServerItemRef.GetItem(szItemID);
     try
-      pdwCount:= StdItemPropCount; {standard properties only &&&}
-      if Assigned(ItemResult.ItemProperties) then
-        pdwCount := pdwCount+Cardinal(ItemResult.ItemProperties.Count);
-      ppPropertyIDs:= CheckAllocation(pdwCount*SizeOf(DWORD));
-      ppDescriptions:= CheckAllocation(pdwCount*SizeOf(PWideChar));
-      ppvtDataTypes:= CheckAllocation(pdwCount*SizeOf(TVarType));
-      for i:= 0 to StdItemPropCount - 1 do
-      begin
-        ppPropertyIDs^[i]:= StdItemPropID[i];
-        ppDescriptions^[i]:= StringToLPOLESTR(StdItemPropDesc[i]); {check alloc &&&}
-        ppvtDataTypes^[i]:= StdItemPropType[i]
-      end;
-      if Assigned(ItemResult.ItemProperties) then
-        for i:= 0 to ItemResult.ItemProperties.Count-1 do
+      FillProperties(szItemID, False, 0, nil, ItemProperties);
+
+      try
+        pdwCount := ItemProperties.dwNumProperties;
+        ppPropertyIDs:= CheckAllocation(pdwCount*SizeOf(DWORD));
+        ppDescriptions:= CheckAllocation(pdwCount*SizeOf(PWideChar));
+        ppvtDataTypes:= CheckAllocation(pdwCount*SizeOf(TVarType));
+        for i:= 0 to pdwCount - 1 do
         begin
-          ppPropertyIDs^[i+StdItemPropCount]:= ItemResult.ItemProperties.GetPropertyItem(i).Pid;
-          ppDescriptions^[i+StdItemPropCount]:= StringToLPOLESTR(ItemResult.ItemProperties.GetPropertyItem(i).Description); {check alloc &&&}
-          ppvtDataTypes^[i+StdItemPropCount]:= ItemResult.ItemProperties.GetPropertyItem(i).DataType;
+          ppPropertyIDs^[i]:= ItemProperties.pItemProperties^[i].dwPropertyID;
+          ppDescriptions^[i]:= StringToLPOLESTR(ItemProperties.pItemProperties^[i].szDescription);
+          ppvtDataTypes^[i]:= ItemProperties.pItemProperties^[i].vtDataType;
         end;
-      ppvtDataTypes^[pidDataType]:= ItemResult.CanonicalDataType;
+      finally
+        FreeOPCItemProperties(ItemProperties);
+      end;
+      ppvtDataTypes^[OPC_PROPERTY_DATATYPE]:= ItemResult.CanonicalDataType;
     finally
       ItemResult.ReleaseNonGroupReference
     end;
@@ -3464,8 +4000,9 @@ begin
   Result:= AddOrValidate(True, False, dwCount, pItemArray, ppAddResults, ppErrors)
 {$IFDEF GLD}
   ; SendDebug(Format('Added %d items', [dwCount]));
-  for i:= 0 to dwCount - 1 do
-    SendDebug(Format('  Item %d Server handle = %d', [i + 1, ppAddResults^[i].hServer]))
+  if dwCount > 0 then
+    for i:= 0 to dwCount - 1 do
+      SendDebug(Format('  Item %d Server handle = %d', [i + 1, ppAddResults^[i].hServer]))
 {$ENDIF}
 end;
 
@@ -3479,7 +4016,7 @@ var
   ItemID: String;
   ItemResult: TServerItemRef;
   NewItem: TGroupItemImpl;
-  ErrorCount: Integer;
+  IsError: Boolean;
 begin
   ppResults:= nil;
   ppErrors:= nil;
@@ -3488,7 +4025,7 @@ begin
     CheckCount(dwCount, pItemArray);
     ppResults:= ZeroAllocation(dwCount*sizeof(OPCITEMRESULT)); {cf 1.12.3}
     ppErrors:= CheckAllocation(dwCount*sizeof(HRESULT));
-    ErrorCount:= 0;
+    IsError:= False;
     for i:= 0 to dwCount -1 do
     begin
       ppErrors^[i]:= S_OK;
@@ -3512,9 +4049,9 @@ begin
           ppErrors^[i]:= E.ErrorCode
       end;
       if ppErrors^[i] <> S_OK then
-        Inc(ErrorCount)
+        IsError := True;
     end;
-    if ErrorCount = 0 then
+    if not IsError then
       Result:= S_OK
     else
       Result:= S_FALSE
@@ -3544,13 +4081,12 @@ begin
 {$IFDEF GLD}
     SendDebug(Format('AsyncIO2Read dwCount = %d, Transid=%d', [dwCount, dwTransactionId]));
 {$ENDIF}
-    pdwCancelID:= DWORD(TAsyncReadTask.Create(Self, dwTransactionID, dwCount, phServer));
+    pdwCancelID:= DWORD(TAsyncReadTask.Create(Self, dwTransactionID, dwCount, phServer, ppErrors, Result));
 {$IFDEF SLOWCALLBACKS}
     TestPostMessage(OpcWindow, CM_ASYNCTASK, pdwCancelID, 0);
 {$ELSE}
     PostMessage(OpcWindow, CM_ASYNCTASK, pdwCancelID, 0);
 {$ENDIF}
-    Result:= S_OK
   except
     on E: EOpcError do
       Result:= E.ErrorCode;
@@ -3568,9 +4104,8 @@ begin
     CheckCount(dwCount, phServer);   {cf 1.13.9}
     if GOpcItemServer.AlwaysAllocateErrorArrays then
       ppErrors:= AllocErrorArray(dwCount); {cf. 1.12.1}
-    pdwCancelID:= DWORD(TAsyncWriteTask.Create(Self, dwTransactionID, dwCount, phServer, pItemValues));
+    pdwCancelID:= DWORD(TAsyncWriteTask.Create(Self, dwTransactionID, dwCount, phServer, pItemValues, ppErrors, Result));
     PostMessage(OpcWindow, CM_ASYNCTASK, pdwCancelID, 0);
-    Result:= S_OK
   except
     on E: EOpcError do
       Result:= E.ErrorCode;
@@ -3754,6 +4289,11 @@ begin
     while PeekMessage(Msg, OpcWindow, WM_TIMER, WM_TIMER, PM_REMOVE) do ;
 
   end;
+  if FGroupKeepAlive <> nil then
+  begin
+    FreeAndNil(FGroupKeepAlive);
+    while PeekMessage(Msg, OpcWindow, WM_TIMER, WM_TIMER, PM_REMOVE) do ;
+  end;
   {notify in main thread}
   if gsNotified in FGroupState then
   begin
@@ -3796,6 +4336,7 @@ begin
     for i:= 0 to Count - 1 do
     with TGroupItemImpl(ActiveList[i]) do
     begin
+      Tick; // Clear cache changed
       ClientHandles[i]:= FhClient;
       try
         if Source = OPC_DS_DEVICE then
@@ -3816,7 +4357,61 @@ begin
       FDataCallback.OnDataChange(TransactionID,
        hClientGroup, MasterQuality, MasterError, Count, Pointer(ClientHandles),
        Pointer(Values), Pointer(Qualities), Pointer(Timestamps), Pointer(Errors));
-      TServerImpl(FClientInfo).SetLastUpdate
+      TServerImpl(FClientInfo).SetLastUpdate;
+      if FGroupKeepAlive <> nil then
+        FGroupKeepAlive.RestartTimer;
+    except
+      on E: EOleSysError do
+        GOpcItemServer.GroupCallbackError(E, Self, ccDa2DataChange)
+    end
+  end
+end;
+
+procedure TGroupImpl.DoRefreshMaxAge(MaxAge: DWORD; ActualTimestamp: TFileTime; TransactionID: DWORD; ActiveList: TList);
+var
+  i: Integer;
+  Count: Integer;
+  ClientHandles: array of OPCHANDLE;
+  Values: array of OleVariant;
+  Qualities: array of Word;
+  Timestamps: array of TFiletime;
+  Errors: array of HRESULT;
+  MasterError, MasterQuality: HRESULT;
+begin
+  if Assigned(FDataCallback) and FActive then
+  begin
+    Count:= ActiveList.Count;
+    SetLength(ClientHandles, Count);
+    SetLength(Values, Count);
+    SetLength(Qualities, Count);
+    SetLength(Timestamps, Count);
+    SetLength(Errors, Count);
+    MasterError:= S_OK;
+    MasterQuality:= S_OK;
+    for i:= 0 to Count - 1 do
+    with TGroupItemImpl(ActiveList[i]) do
+    begin
+      Tick; // Clear cache changed
+      ClientHandles[i]:= FhClient;
+      try
+        GetMaxAgeValue(MaxAge, ActualTimestamp, Values[i], Qualities[i], Timestamps[i]);
+        Errors[i]:= S_OK;
+      except
+        on E: EOpcError do
+          Errors[i]:= E.ErrorCode;
+      end;
+      if (MasterError = S_OK) and (Errors[i] <> S_OK) then
+        MasterError:= S_FALSE;
+      if (MasterQuality = S_OK) and (Qualities[i] <> OPC_QUALITY_GOOD) then
+        MasterQuality:= S_FALSE
+    end;
+    try   {try except cf 1.14.1}
+      FDataCallback.OnDataChange(TransactionID,
+       hClientGroup, MasterQuality, MasterError, Count, Pointer(ClientHandles),
+       Pointer(Values), Pointer(Qualities), Pointer(Timestamps), Pointer(Errors));
+      TServerImpl(FClientInfo).SetLastUpdate;
+      if FGroupKeepAlive <> nil then
+        FGroupKeepAlive.RestartTimer;
     except
       on E: EOleSysError do
         GOpcItemServer.GroupCallbackError(E, Self, ccDa2DataChange)
@@ -3936,6 +4531,93 @@ begin
   end
 end;
 
+function TGroupImpl.AsyncIO3ReadMaxAge(dwCount: DWORD;
+  phServer: POPCHANDLEARRAY; pdwMaxAge: PDWORDARRAY;
+  dwTransactionID: DWORD; out pdwCancelID: DWORD;
+  out ppErrors: PResultList): HResult;
+{if you alter this to return an error array don't forget to free and null
+if there is an exception &&&}
+begin
+  ppErrors:= nil;
+  try
+    CheckDeleted;
+    CheckConnected;
+    CheckCount(dwCount, phServer);  {cf 1.13.8}
+    if GOpcItemServer.AlwaysAllocateErrorArrays then
+      ppErrors:= AllocErrorArray(dwCount); {cf. 1.12.1}
+{$IFDEF GLD}
+    SendDebug(Format('AsyncIO3ReadMaxAge dwCount = %d, Transid=%d', [dwCount, dwTransactionId]));
+{$ENDIF}
+    pdwCancelID:= DWORD(TAsyncReadMaxAgeTask.Create(Self, dwTransactionID, dwCount, phServer, pdwMaxAge, ppErrors, Result));
+{$IFDEF SLOWCALLBACKS}
+    TestPostMessage(OpcWindow, CM_ASYNCTASK, pdwCancelID, 0);
+{$ELSE}
+    PostMessage(OpcWindow, CM_ASYNCTASK, pdwCancelID, 0);
+{$ENDIF}
+  except
+    on E: EOpcError do
+      Result:= E.ErrorCode;
+  end
+end;
+
+function TGroupImpl.AsyncIO3WriteVQT(dwCount: DWORD;
+  phServer: POPCHANDLEARRAY; pItemVQT: POPCITEMVQTARRAY;
+  dwTransactionID: DWORD; out pdwCancelID: DWORD;
+  out ppErrors: PResultList): HResult;
+begin
+  ppErrors:= nil;
+  try
+    CheckDeleted;
+    CheckConnected;
+    CheckCount(dwCount, phServer);   {cf 1.13.9}
+    if GOpcItemServer.AlwaysAllocateErrorArrays then
+      ppErrors:= AllocErrorArray(dwCount); {cf. 1.12.1}
+    pdwCancelID:= DWORD(TAsyncWriteVQTTask.Create(Self, dwTransactionID, dwCount, phServer, pItemVQT, ppErrors, Result));
+    PostMessage(OpcWindow, CM_ASYNCTASK, pdwCancelID, 0);
+  except
+    on E: EOpcError do
+      Result:= E.ErrorCode;
+  end
+end;
+
+function TGroupImpl.AsyncIO3RefreshMaxAge(dwMaxAge, dwTransactionID: DWORD;
+  out pdwCancelID: DWORD): HResult;
+begin
+  try
+    CheckDeleted;
+    CheckConnected;
+    if not FActive then
+      raise EOpcError.Create(E_FAIL);  {Section 4.3.2 of DA2 spec}
+    pdwCancelID:= DWORD(TRefreshMaxAgeTask.Create(Self, dwTransactionID, dwMaxAge));
+    PostMessage(OpcWindow, CM_ASYNCTASK, pdwCancelID, 0);
+    Result:= S_OK
+  except
+    on E: EOpcError do
+      Result:= E.ErrorCode
+  end
+end;
+
+function TGroupImpl.SetItemDeadband(dwCount: DWORD;
+  phServer: POPCHANDLEARRAY; pPercentDeadband: PSingleArray;
+  out ppErrors: PResultList): HResult;
+begin
+  Result:= IterateItems(dwCount, phServer, pPercentDeadband, ItemSetDeadband, ppErrors)
+end;
+
+function TGroupImpl.GetItemDeadband(dwCount: DWORD;
+  phServer: POPCHANDLEARRAY; out ppPercentDeadband: PSingleArray;
+  out ppErrors: PResultList): HResult;
+begin
+  ppPercentDeadband:= ZeroAllocation(dwCount*SizeOf(Single));
+  Result:= IterateItems(dwCount, phServer, ppPercentDeadband, ItemGetDeadband, ppErrors)
+end;
+
+function TGroupImpl.ClearItemDeadband(dwCount: DWORD;
+  phServer: POPCHANDLEARRAY; out ppErrors: PResultList): HResult;
+begin
+  Result:= IterateItems(dwCount, phServer, nil, ItemClearDeadband, ppErrors)
+end;
+
 function TGroupImpl.GetGroupItemList: TGroupItemList;
 begin
   Result:= FItemList
@@ -4028,6 +4710,32 @@ type
     ppItemValues: POPCITEMSTATEARRAY;
   end;
 
+  PSyncIO2Param = ^TSyncIO2Param;
+  TSyncIO2Param = record
+    GroupActive: Boolean;
+    ActualTimestamp: TFileTime;
+    pdwMaxAge: PDWORDARRAY;
+    ppvValues: POleVariantArray;
+    ppwQualities: PWordArray;
+    ppftTimeStamps: PFileTimeArray;
+  end;
+
+  PAsyncReadParam = ^TAsyncReadParam;
+  TAsyncReadParam = record
+    hClientItem: array of OPCHANDLE;
+    Qualities: array of Word;
+    Timestamps: array of TFiletime;
+    Values: array of OleVariant;
+  end;
+
+  PAsyncReadMaxAgeParam = ^TAsyncReadMaxAgeParam;
+  TAsyncReadMaxAgeParam = record
+    hClientItem: array of OPCHANDLE;
+    Qualities: array of Word;
+    Timestamps: array of TFiletime;
+    Values: array of OleVariant;
+  end;
+
 procedure TGroupImpl.ItemSyncIORead(Item: TGroupItemImpl; Index: Integer;
   Data: Pointer);
 var
@@ -4059,18 +4767,72 @@ begin
   Item.ServerItem.SetItemValue(pItemValues^[Index]);
 end;
 
+procedure TGroupImpl.ItemSyncIO2Read(Item: TGroupItemImpl; Index: Integer;
+  Data: Pointer);
+var
+  IOP: PSyncIO2Param absolute Data;
+begin
+  if (Item.ServerItem.AccessRights and OPC_READABLE) = 0 then
+    raise EOpcError.Create(OPC_E_BADRIGHTS);
+  Item.GetMaxAgeValue(IOP^.pdwMaxAge[Index], IOP^.ActualTimestamp,
+    IOP^.ppvValues[Index], IOP^.ppwQualities[Index], IOP^.ppftTimeStamps[Index]);
+end;
+
+procedure TGroupImpl.ItemSyncIO2Write(Item: TGroupItemImpl;
+  Index: Integer; Data: Pointer);
+var
+  pItemValues: POPCITEMVQTARRAY absolute Data;
+begin
+  Item.ServerItem.SetItemVQT(pItemValues^[Index]);
+end;
+
+procedure TGroupImpl.ItemSetDeadband(Item: TGroupItemImpl;
+  Index: Integer; Data: Pointer);
+const
+  Eps = 1E-20;
+var
+  pPercentDeadband: PSingleArray absolute Data;
+  Value: Single;
+begin
+  Value:= pPercentDeadband^[Index];
+  if (Value < -Eps) or (Value > 100+Eps) then
+    raise EOpcError.Create(E_INVALIDARG);
+
+  Item.PercentDeadband:= Value;
+  Item.PercentDeadbandSet:= True;
+end;
+
+procedure TGroupImpl.ItemGetDeadband(Item: TGroupItemImpl;
+  Index: Integer; Data: Pointer);
+var
+  pPercentDeadband: PSingleArray absolute Data;
+begin
+  if not Item.PercentDeadbandSet then
+    raise EOpcError.Create(OPC_E_DEADBANDNOTSET);
+  pPercentDeadband^[Index]:= Item.PercentDeadband;
+end;
+
+procedure TGroupImpl.ItemClearDeadband(Item: TGroupItemImpl;
+  Index: Integer; Data: Pointer);
+begin
+  if not Item.PercentDeadbandSet then
+    raise EOpcError.Create(OPC_E_DEADBANDNOTSET);
+  Item.PercentDeadband := 0;
+  Item.PercentDeadbandSet := False;
+end;
+
 function TGroupImpl.IterateItems(dwCount: Integer;
   phServer: POPCHANDLEARRAY; Data: Pointer; Action: TItemAction;
   var ppErrors: PResultList): HRESULT;
 var
   i: Integer;
-  ErrorCount: Integer;
+  IsError: Boolean;
 begin
   ppErrors:= nil;
   try
     CheckCount(dwCount, phServer);
     ppErrors:= CheckAllocation(dwCount*SizeOf(HRESULT));
-    ErrorCount:= 0;
+    IsError:= False;
     for i:= 0 to dwCount - 1 do
     begin
       try
@@ -4080,12 +4842,12 @@ begin
       except
         on E: EOpcError do
         begin
-          Inc(ErrorCount);
+          IsError:= True;
           ppErrors^[i]:= E.ErrorCode
         end
       end;
     end;
-    if ErrorCount = 0 then
+    if not IsError then
       Result:= S_OK
     else
       Result:= S_FALSE
@@ -4293,6 +5055,51 @@ begin
   Result:= IterateItems(dwCount, phServer, pItemValues, ItemSyncIOWrite, ppErrors)
 end;
 
+function TGroupImpl.SyncIO2ReadMaxAge(dwCount: DWORD; phServer: POPCHANDLEARRAY;
+  pdwMaxAge: PDWORDARRAY; out ppvValues: POleVariantArray;
+  out ppwQualities: PWordArray; out ppftTimeStamps: PFileTimeArray;
+  out ppErrors: PResultList): HResult;
+var
+  IOP: TSyncIO2Param;
+begin
+  try
+    CheckCount(dwCount, phServer);
+    ppvValues := ZeroAllocation(dwCount * SizeOf(OleVariant));
+    ppwQualities := ZeroAllocation(dwCount * SizeOf(Word));
+    ppftTimeStamps := ZeroAllocation(dwCount * SizeOf(TFileTime));
+
+    IOP.ppvValues := ppvValues;
+    IOP.ppwQualities := ppwQualities;
+    IOP.ppftTimeStamps := ppftTimeStamps;
+    IOP.GroupActive:= FActive;
+    GOpcItemServer.GetTimestamp(IOP.ActualTimestamp);
+    IOP.pdwMaxAge := pdwMaxAge;
+
+    Result:= IterateItems(dwCount, phServer, @IOP, ItemSyncIO2Read, ppErrors);
+    if Succeeded(Result) then
+      TServerImpl(FClientInfo).SetLastUpdate
+    else begin
+      FreeAndNull(ppvValues);
+      FreeAndNull(ppwQualities);
+      FreeAndNull(ppftTimeStamps);
+    end;
+  except
+    on E: EOpcError do
+    begin
+      Result:= E.ErrorCode;
+      FreeAndNull(ppvValues);
+      FreeAndNull(ppwQualities);
+      FreeAndNull(ppftTimeStamps);
+    end
+  end
+end;
+
+function TGroupImpl.SyncIO2WriteVQT(dwCount: DWORD; phServer: POPCHANDLEARRAY;
+  pItemVQT: POPCITEMVQTARRAY; out ppErrors: PResultList): HResult;
+begin
+  Result:= IterateItems(dwCount, phServer, pItemVQT, ItemSyncIO2Write, ppErrors)
+end;
+
 function TGroupImpl.ValidateItems(dwCount: DWORD; pItemArray: POPCITEMDEFARRAY;
   bBlobUpdate: BOOL; out ppValidationResults: POPCITEMRESULTARRAY;
   out ppErrors: PResultList): HResult;
@@ -4408,9 +5215,8 @@ begin
         ppErrors:= AllocErrorArray(dwCount); {cf. 1.12.1}
       pTransactionID:=
         DWORD(TAsyncReadTask1.Create(Self, dwCount, phServer, dwSource,
-          TDa1Format(dwConnection)));
+          TDa1Format(dwConnection), ppErrors, Result));
       PostMessage(OpcWindow, CM_ASYNCTASK, pTransactionID, 0);
-      Result:= S_OK
     end
   except
     on E: EOpcError do
@@ -4454,9 +5260,8 @@ begin
     begin
       if GOpcItemServer.AlwaysAllocateErrorArrays then
         ppErrors:= AllocErrorArray(dwCount); {cf. 1.12.1}
-      pTransactionID:= DWORD(TAsyncWriteTask1.Create(Self, dwCount, phServer, pItemValues));
+      pTransactionID:= DWORD(TAsyncWriteTask1.Create(Self, dwCount, phServer, pItemValues, ppErrors, Result));
       PostMessage(OpcWindow, CM_ASYNCTASK, pTransactionID, 0);
-      Result:= S_OK
     end
   except
     on E: EOpcError do
@@ -4655,6 +5460,70 @@ begin
   CoDisconnectObject(Self, 0)
 end;
 
+function TGroupImpl.GetKeepAlive(out pdwKeepAliveTime: DWORD): HResult;
+begin
+  if FGroupKeepAlive = nil then
+    pdwKeepAliveTime := 0
+  else
+    pdwKeepAliveTime := FGroupKeepAlive.KeepAlive;
+  Result := S_OK;
+end;
+
+function TGroupImpl.SetKeepAlive(dwKeepAliveTime: DWORD;
+  out pdwRevisedKeepAliveTime: DWORD): HResult;
+begin
+  if dwKeepAliveTime = 1 then
+  begin
+    Result := OPC_S_UNSUPPORTEDRATE;
+    Exit;
+  end;
+
+  pdwRevisedKeepAliveTime := dwKeepAliveTime;
+
+  if FGroupKeepAlive <> nil then
+    FreeAndNil(FGroupKeepAlive);
+
+  if dwKeepAliveTime <> 0 then
+  begin
+    FGroupKeepAlive := TGroupKeepAlive.Create(Self, dwKeepAliveTime);
+    pdwRevisedKeepAliveTime := FGroupKeepAlive.KeepAlive;
+  end;
+
+  Result := S_OK;
+end;
+
+{ TGroupKeepAlive }
+
+constructor TGroupKeepAlive.Create(AGroup: TGroupImpl; AKeepAlive : DWORD);
+begin
+  Group := AGroup;
+  KeepAlive := AKeepAlive;
+  if SetTimer(OpcWindow, DWORD(Self), KeepAlive, nil) = 0 then
+    raise EOpcError.Create(E_FAIL);
+end;
+
+destructor TGroupKeepAlive.Destroy;
+begin
+  KillTimer(OpcWindow, DWORD(Self));
+  inherited;
+end;
+
+procedure TGroupKeepAlive.RestartTimer;
+begin
+  KillTimer(OpcWindow, DWORD(Self));
+  if SetTimer(OpcWindow, DWORD(Self), KeepAlive, nil) = 0 then
+    raise EOpcError.Create(E_FAIL);
+end;
+
+procedure TGroupKeepAlive.Tick;
+begin
+  try
+    Group.FDataCallback.OnDataChange(0, Group.hClientGroup,
+      OPC_QUALITY_GOOD, S_OK, 0, nil, nil, nil, nil, nil);
+  finally
+  end;
+end;
+
 { TServerItemRef }
 
 procedure TServerItemRef.AssignTo(var Result: OPCITEMATTRIBUTES);
@@ -4682,10 +5551,8 @@ end;
 
 constructor TServerItemRef.Create(const aItemID: String);
 var
-  Quality: Word;
   Ar: TAccessRights;
   AccessPath: String;
-  SampleVal: OleVariant;
 begin
   inherited Create;
   ItemHandle:= INVALID_HANDLE_VALUE;
@@ -4695,25 +5562,84 @@ begin
   ItemHandle:= GOpcItemServer.GetExtendedItemInfo(ItemID, AccessPath,
     Ar, EUInfo, ItemProperties);
   AccessRights:= OpcAccessRights(Ar);
-  Quality:= OPC_QUALITY_GOOD;
-  SampleVal:= GOpcItemServer.GetItemValue(ItemHandle, Quality);
-  CanonicalDataType:= VarType(SampleVal);
-  AnalogType:= not VarIsArray(SampleVal) and
+  CacheQuality:= OPC_QUALITY_GOOD;
+  CacheValue:= GOpcItemServer.GetItemVQT(ItemHandle, CacheQuality, CacheTimestamp);
+  CanonicalDataType:= VarType(CacheValue);
+  AnalogType:= not VarIsArray(CacheValue) and
                 NumericType(CanonicalDataType)
 end;
 
-procedure TServerItemRef.GetItemValue(var Result: OleVariant;
-  var Quality: Word);
+procedure TServerItemRef.GetMaxAgeVQT(MaxAge: Cardinal;
+  ActualTimestamp: TFileTime; var Result: OleVariant; var Quality: Word;
+  var Timestamp: TFileTime);
+begin
+  // Read new value
+  if MaxAge = 0 then
+    GetItemVQT(Result, Quality, Timestamp)
+  // Read cached value
+  else if MaxAge = MAXDWORD then
+    GetCacheVQT(Result, Quality, Timestamp)
+  else begin
+    GetCacheVQT(Result, Quality, Timestamp);
+    // Check MaxAge
+    if Int64(Timestamp) + Int64(MaxAge) * 10000 < Int64(ActualTimestamp) then
+      GetItemVQT(Result, Quality, Timestamp);
+  end;
+end;
+
+procedure TServerItemRef.GetCacheVQT(var Result: OleVariant;
+  var Quality: Word; var Timestamp: TFileTime);
+begin
+  if (AccessRights and OPC_READABLE) = 0 then
+    raise EOpcError.Create(OPC_E_BADRIGHTS);
+  Result:= CacheValue;
+  Quality:= CacheQuality;
+  Timestamp:= CacheTimestamp;
+end;
+
+procedure TServerItemRef.GetItemVQT(var Result: OleVariant;
+  var Quality: Word; var Timestamp: TFileTime);
 begin
   if (AccessRights and OPC_READABLE) = 0 then
     raise EOpcError.Create(OPC_E_BADRIGHTS);
   Quality:= OPC_QUALITY_GOOD;
-  Result:= GOpcItemServer.GetItemValue(ItemHandle, Quality)
+  Result:= GOpcItemServer.GetItemVQT(ItemHandle, Quality, Timestamp);
+
+  CacheValue:= Result;
+  CacheQuality:= Quality;
+  CacheTimestamp:= Timestamp;
 end;
 
 procedure TServerItemRef.ReleaseNonGroupReference;
 begin
   Destroy
+end;
+
+procedure TServerItemRef.SetItemVQT(const ValueVQT: OPCITEMVQT);
+var
+  TypeValVQT: OPCITEMVQT;
+  Res: HRESULT;
+begin
+  if (AccessRights and OPC_WRITABLE) = 0 then  {cf 1.13.15}
+    raise EOpcError.Create(OPC_E_BADRIGHTS);
+  if VarType(ValueVQT.vDataValue) = VT_EMPTY then
+    raise EOpcError.Create(OPC_E_BADTYPE);
+  try
+    if VarType(ValueVQT.vDataValue) = CanonicalDataType then
+    begin
+      GOpcItemServer.SetItemVQT(ItemHandle, ValueVQT)
+    end else
+    begin
+      TypeValVQT := ValueVQT;
+      Res:= VariantChangeType(TypeValVQT.vDataValue, ValueVQT.vDataValue, 0, CanonicalDataType);
+      if not Succeeded(Res) then
+        raise EOpcError.Create(Res);
+      GOpcItemServer.SetItemVQT(ItemHandle, TypeValVQT)
+    end
+  except
+    on E: EVariantError do
+      raise EOpcError.Create(OPC_E_BADTYPE)
+  end
 end;
 
 procedure TServerItemRef.SetItemValue(const Value: OleVariant);
@@ -4805,12 +5731,18 @@ begin
   end
 end;
 
-procedure TServerItem.ItemCallback(const Value: OleVariant; Quality: Word);
+procedure TServerItem.ItemCallback(const Value: OleVariant; Quality: Word; TimeStamp: TFileTime);
 var
   i: Integer;
 begin
   with LockRefList do
   try
+    CacheValue := Value;
+    CacheQuality := Quality;
+    if Int64(TimeStamp) = Int64(TimestampNotSet) then
+      GOpcItemServer.GetTimestamp(CacheTimestamp)
+    else
+      CacheTimestamp := TimeStamp;
     for i:= 0 to Count - 1 do
       TGroupItemImpl(Items[i]).ItemCallback(Value, Quality)
   finally
@@ -5048,16 +5980,32 @@ begin
   end
 end;
 
+procedure TGroupItemImpl.GetMaxAgeValue(MaxAge: Cardinal; ActualTimestamp: TFileTime;
+  var Result: OleVariant; var Quality: Word; var Timestamp: TFiletime);
+begin
+  // Read new value
+  if MaxAge = 0 then
+    GetItemValue(Result, Quality, Timestamp)
+  // Read cached value
+  else if MaxAge = MAXDWORD then
+    GetCacheValue(Result, Quality, Timestamp)
+  else begin
+    GetCacheValue(Result, Quality, Timestamp);
+    // Check MaxAge
+    if Int64(Timestamp) + Int64(MaxAge) * 10000 < Int64(ActualTimestamp) then
+      GetItemValue(Result, Quality, Timestamp);
+  end;
+end;
+
 procedure TGroupItemImpl.GetItemValue(var Result: OleVariant;
   var Quality: Word; var Timestamp: TFiletime);
 var
   Res: HRESULT;
 begin
-  ServerItem.GetItemValue(Result, Quality);
+  ServerItem.GetItemVQT(Result, Quality, Timestamp);
   CacheValue:= Result;
   CacheQuality:= Quality;
-  GOpcItemServer.GetTimestamp(CacheTimestamp); {cf 1.14.28}
-  Timestamp:= CacheTimestamp;  {cf 1.11.2}
+  CacheTimestamp:= Timestamp;
   if (FRequestedDataType <> VT_EMPTY) and
      (FRequestedDataType <> ServerItem.CanonicalDataType) then {1.10.3}
   begin
@@ -5069,14 +6017,16 @@ end;
 
 procedure TGroupItemImpl.InvalidateCache;
 begin
-  ServerItem.GetItemValue(CacheValue, CacheQuality);
-  GOpcItemServer.GetTimestamp(CacheTimestamp); {cf 1.14.28}
+  ServerItem.GetItemVQT(CacheValue, CacheQuality, CacheTimestamp);
   CacheUpdated:= true
 end;
 
 procedure TGroupItemImpl.ItemCallback(const Value: OleVariant; Quality: Word);
+var
+  Timestamp: TFileTime;
 begin
-  if UpdateCache(Value, Quality) then
+  GOpcItemServer.GetTimestamp(Timestamp);
+  if UpdateCache(Value, Quality, Timestamp) then
     CacheUpdated:= true
 end;
 
@@ -5099,6 +6049,7 @@ function TGroupItemImpl.Tick: Boolean;
 var
   ItemVal: OleVariant;
   ItemQuality: Word;
+  ItemTimestamp: TFileTime;
 begin
   if not FActive then
   begin
@@ -5111,8 +6062,8 @@ begin
   end else
   if not ServerItem.Subscribed then
   begin
-    ServerItem.GetItemValue(ItemVal, ItemQuality);
-    Result:= UpdateCache(ItemVal, ItemQuality)
+    ServerItem.GetItemVQT(ItemVal, ItemQuality, ItemTimestamp);
+    Result:= UpdateCache(ItemVal, ItemQuality, ItemTimestamp)
   end else
   begin
     Result:= false
@@ -5120,7 +6071,7 @@ begin
 end;
 
 function TGroupItemImpl.UpdateCache(const Value: OleVariant;
-  Quality: Word): Boolean;
+  Quality: Word; Timestamp: TFileTime): Boolean;
 
   function ValueChanged: Boolean;  {cf 1.14.17}
   var
@@ -5144,7 +6095,8 @@ function TGroupItemImpl.UpdateCache(const Value: OleVariant;
           ah:= 0
         end
       end;
-      if Abs(CacheValue - Value) > (Group.PercentDeadband/100.0)*(ah - al) then
+      if (    PercentDeadbandSet and (Abs(CacheValue - Value) > (      PercentDeadband/100.0)*(ah - al))) or
+         (not PercentDeadbandSet and (Abs(CacheValue - Value) > (Group.PercentDeadband/100.0)*(ah - al))) then
       begin
         Result:= true
       end else
@@ -5167,7 +6119,7 @@ begin
   begin
     CacheValue:= Value;
     CacheQuality:= Quality;
-    GOpcItemServer.GetTimestamp(CacheTimestamp); {cf 1.14.28}
+    CacheTimestamp:= Timestamp;
     GOpcItemServer.OnItemValueChange(Self)
   end
 end;
@@ -5286,8 +6238,9 @@ begin
     SendDebug(Format('AsyncTask.Process %p, Transid=%d', [Pointer(Self), TransactionId]));
 {$ENDIF}
     Group.DeleteTask(Self);  {cf 1.14.12}
-    Process
-  end
+    if not BlockProcess then
+      Process
+  end;
 end;
 
 destructor TAsyncTask.Destroy;
@@ -5301,26 +6254,87 @@ end;
 { TAsyncIOTask }
 
 constructor TAsyncIOTask.Create(aGroup: TGroupImpl; aTransactionID, aCount: DWORD;
-  phServer: POPCHANDLEARRAY);
+  phServer: POPCHANDLEARRAY; ppErrors: PResultList; var Result: HResult);
 var
   i: Integer;
 begin
   inherited Create(aGroup, aTransactionID);
+  Result := S_OK;
   Count:= aCount;
   SetLength(GroupItem, Count);
+  SetLength(GroupItemValid, Count);
   TransactionID:= aTransactionID;
+  ValidCount := 0;
   for i:= 0 to Count - 1 do
-    GroupItem[i]:= TGroupItemImpl(phServer^[i])
+  begin
+    GroupItem[i]:= TGroupItemImpl(phServer^[i]);
+    try
+      Group.ValidateServerHandle(Cardinal(GroupItem[i]));
+      GroupItemValid[i] := True;
+      Inc(ValidCount);
+    except
+      on E: EOPCError do
+      begin
+        ppErrors[i] := E.ErrorCode;
+        GroupItemValid[i] := False;
+        Result := S_FALSE;
+      end;
+    end;
+  end;
+
+  if ValidCount = 0 then
+  begin
+    BlockProcess := True;
+    Result := S_FALSE;
+  end;
+end;
+
+function TAsyncIOTask.ProcessItems(ppErrors: PResultList; var Data): HRESULT;
+var
+  i, Index: Integer;
+  IsError: Boolean;
+begin
+  Result := S_OK;
+  try
+    IsError:= False;
+    Index := 0;
+    for i:= 0 to Count - 1 do
+    if GroupItemValid[i] then
+    begin
+      try
+        Group.ValidateServerHandle(Cardinal(GroupItem[i]));
+        ProcessItem(TGroupItemImpl(GroupItem[i]), i, Index, Data, Result);
+        if ppErrors <> nil then
+          ppErrors^[Index]:= S_OK;
+      except
+        on E: EOpcError do
+        begin
+          IsError:= True;
+          if ppErrors <> nil then
+            ppErrors^[Index]:= E.ErrorCode
+        end
+      end;
+      Inc(Index);
+    end;
+    if IsError then
+      Result:= S_FALSE
+  except
+    on E: EOpcError do
+    begin
+      Result:= E.ErrorCode;
+    end
+  end
 end;
 
 { TAsyncWriteTask }
 
 constructor TAsyncWriteTask.Create(aGroup: TGroupImpl; aTransactionID, aCount: DWORD;
-  phServer: POPCHANDLEARRAY; pValues: POleVariantArray);
+  phServer: POPCHANDLEARRAY; pValues: POleVariantArray;
+  ppErrors: PResultList; var Result: HResult);
 var
   i: Integer;
 begin
-  inherited Create(aGroup, aTransactionID, aCount, phServer);
+  inherited Create(aGroup, aTransactionID, aCount, phServer, ppErrors, Result);
   SetLength(Values, Count);
   for i:= 0 to Count - 1 do
     Values[i]:= pValues^[i];
@@ -5331,34 +6345,16 @@ var
   hClientItem: array of OPCHANDLE;
   Errors: array of HRESULT;
   MasterError: HRESULT;
-  i: Integer;
 begin
-  SetLength(hClientItem, Count);
-  SetLength(Errors, Count);
-  MasterError:= S_OK;
-  for i:= 0 to Count - 1 do
-  begin
-    try
-      Group.ValidateServerHandle(Cardinal(GroupItem[i]));      {cf 1.13.10}
-      with GroupItem[i] do
-      begin
-        hClientItem[i]:= FhClient;
-        ServerItem.SetItemValue(Values[i]);
-        Errors[i]:= S_OK
-      end
-    except
-      on E: EOpcError do
-        Errors[i]:= E.ErrorCode
-    end;
-    if (MasterError = S_OK) and (Errors[i] <> S_OK) then
-      MasterError:= S_FALSE;
-  end;
+  SetLength(hClientItem, ValidCount);
+  SetLength(Errors, ValidCount);
+  MasterError:= ProcessItems(Pointer(Errors), hClientItem);
   with Group do
   if Assigned(FDataCallback) then
   begin
     try   {try except cf 1.14.4}
       FDataCallback.OnWriteComplete(TransactionID,
-          hClientGroup, MasterError, Count,
+          hClientGroup, MasterError, ValidCount,
           Pointer(hClientItem), Pointer(Errors))
     except
       on E: EOleSysError do
@@ -5367,57 +6363,158 @@ begin
   end
 end;
 
+procedure TAsyncWriteTask.ProcessItem(Item: TGroupItemImpl; IndexSrc,
+  IndexDst: Integer; var Data; var Status: HRESULT);
+var
+  pClienthandles: POPCHANDLEARRAY absolute Data;
+begin
+  pClienthandles[IndexDst]:= Item.FhClient;
+  Item.ServerItem.SetItemValue(Values[IndexSrc]);
+end;
+
+{ TAsyncWriteVQTTask }
+
+constructor TAsyncWriteVQTTask.Create(aGroup: TGroupImpl; aTransactionID,
+  aCount: DWORD; phServer: POPCHANDLEARRAY; pValues: POPCITEMVQTARRAY;
+  ppErrors: PResultList; var Result: HResult);
+var
+  i: Integer;
+begin
+  inherited Create(aGroup, aTransactionID, aCount, phServer, ppErrors, Result);
+  SetLength(Values, Count);
+  for i:= 0 to Count - 1 do
+    Values[i]:= pValues^[i];
+end;
+
+procedure TAsyncWriteVQTTask.Process;
+var
+  hClientItem: array of OPCHANDLE;
+  Errors: array of HRESULT;
+  MasterError: HRESULT;
+begin
+  SetLength(hClientItem, ValidCount);
+  SetLength(Errors, ValidCount);
+  MasterError:= ProcessItems(Pointer(Errors), hClientItem);
+  with Group do
+  if Assigned(FDataCallback) then
+  begin
+    try   {try except cf 1.14.4}
+      FDataCallback.OnWriteComplete(TransactionID,
+          hClientGroup, MasterError, ValidCount,
+          Pointer(hClientItem), Pointer(Errors))
+    except
+      on E: EOleSysError do
+        GOpcItemServer.GroupCallbackError(E, Group, ccDa2WriteComplete)
+    end
+  end
+end;
+
+procedure TAsyncWriteVQTTask.ProcessItem(Item: TGroupItemImpl;
+  IndexSrc, IndexDst: Integer; var Data; var Status: HRESULT); 
+var
+  pClienthandles: POPCHANDLEARRAY absolute Data;
+begin
+  pClienthandles[IndexDst]:= Item.FhClient;
+  Item.ServerItem.SetItemVQT(Values[IndexSrc]);
+end;
+
 { TAsyncReadTask }
 
 procedure TAsyncReadTask.Process;
 var
-  hClientItem: array of OPCHANDLE;
   Errors: array of HRESULT;
-  Qualities: array of Word;
-  Timestamps: array of TFiletime;
-  Values: array of OleVariant;
+  IOP: TAsyncReadParam;
   MasterError: HRESULT;
-  i: Integer;
 begin
 {$IFDEF GLD}
   SendDebug(Format('AsyncIO2Read.Process dwCount = %d', [Count]));
 {$ENDIF}
-  SetLength(hClientItem, Count);
-  SetLength(Errors, Count);
-  SetLength(Qualities, Count);
-  SetLength(Timestamps, Count);
-  SetLength(Values, Count);
-  MasterError:= S_OK;
-  for i:= 0 to Count - 1 do
-  begin
-    try
-      Group.ValidateServerHandle(Cardinal(GroupItem[i])); {cf 1.13.10}
-      with GroupItem[i] do
-      begin
-        hClientItem[i]:= FhClient;
-        GetItemValue(Values[i], Qualities[i], Timestamps[i]);
-        Errors[i]:= S_OK
-      end;
-    except
-      on E: EOpcError do
-        Errors[i]:= E.ErrorCode
-    end;
-    if (MasterError = S_OK) and (Errors[i] <> S_OK) then
-      MasterError:= S_FALSE
-  end;
+  SetLength(IOP.hClientItem, ValidCount);
+  SetLength(Errors, ValidCount);
+  SetLength(IOP.Qualities, ValidCount);
+  SetLength(IOP.Timestamps, ValidCount);
+  SetLength(IOP.Values, ValidCount);
+  MasterError:= ProcessItems(Pointer(Errors), IOP);
   with Group do
   if Assigned(FDataCallback) then
   begin
     try   {try except cf 1.14.5}
       FDataCallback.OnReadComplete(TransactionID,
-       hClientGroup, S_OK, MasterError, Count,
-       Pointer(hClientItem), Pointer(Values), Pointer(Qualities),
-       Pointer(Timestamps), Pointer(Errors))
+       hClientGroup, S_OK, MasterError, ValidCount,
+       Pointer(IOP.hClientItem), Pointer(IOP.Values), Pointer(IOP.Qualities),
+       Pointer(IOP.Timestamps), Pointer(Errors))
+    except
+      on E: EOleSysError do
+        GOpcItemServer.GroupCallbackError(E, Group, ccDa2ReadComplete)
+    end
+  end;
+end;
+
+procedure TAsyncReadTask.ProcessItem(Item: TGroupItemImpl; IndexSrc,
+  IndexDst: Integer; var Data; var Status: HRESULT);
+var
+  IOP: TAsyncReadParam absolute Data;
+begin
+  with GroupItem[IndexSrc] do
+  begin
+    IOP.hClientItem[IndexDst]:= FhClient;
+    GetItemValue(IOP.Values[IndexDst], IOP.Qualities[IndexDst], IOP.Timestamps[IndexDst]);
+  end;
+end;
+
+{ TAsyncReadMaxAgeTask }
+
+constructor TAsyncReadMaxAgeTask.Create(aGroup: TGroupImpl; aTransactionID,
+  aCount: DWORD; phServer: POPCHANDLEARRAY; pdwMaxAge: PDWORDARRAY;
+  ppErrors: PResultList; var Result: HResult);
+var
+  I : Integer;
+begin
+  inherited Create(aGroup, aTransactionID, aCount, phServer, ppErrors, Result);
+  SetLength(MaxAge, Count);
+  for I:= 0 to Count - 1 do
+    MaxAge[I]:= pdwMaxAge[I];
+  GOpcItemServer.GetTimestamp(ActualTimestamp);
+end;
+
+procedure TAsyncReadMaxAgeTask.Process;
+var
+  Errors: array of HRESULT;
+  IOP: TAsyncReadMaxAgeParam;
+  MasterError: HRESULT;
+begin
+{$IFDEF GLD}
+  SendDebug(Format('AsyncIO3ReadMaxAge.Process dwCount = %d', [Count]));
+{$ENDIF}
+  SetLength(IOP.hClientItem, ValidCount);
+  SetLength(Errors, ValidCount);
+  SetLength(IOP.Qualities, ValidCount);
+  SetLength(IOP.Timestamps, ValidCount);
+  SetLength(IOP.Values, ValidCount);
+  MasterError:= ProcessItems(Pointer(Errors), IOP);
+  with Group do
+  if Assigned(FDataCallback) then
+  begin
+    try   {try except cf 1.14.5}
+      FDataCallback.OnReadComplete(TransactionID,
+       hClientGroup, S_OK, MasterError, ValidCount,
+       Pointer(IOP.hClientItem), Pointer(IOP.Values), Pointer(IOP.Qualities),
+       Pointer(IOP.Timestamps), Pointer(Errors))
     except
       on E: EOleSysError do
         GOpcItemServer.GroupCallbackError(E, Group, ccDa2ReadComplete)
     end
   end
+end;
+
+procedure TAsyncReadMaxAgeTask.ProcessItem(Item: TGroupItemImpl; IndexSrc,
+  IndexDst: Integer; var Data; var Status: HRESULT);
+var
+  IOP: TAsyncReadMaxAgeParam absolute Data;
+begin
+  IOP.hClientItem[IndexDst]:= Item.FhClient;
+  Item.GetMaxAgeValue(MaxAge[IndexSrc], ActualTimestamp,
+    IOP.Values[IndexDst], IOP.Qualities[IndexDst], IOP.Timestamps[IndexDst]);
 end;
 
 { TRefreshTask }
@@ -5453,6 +6550,42 @@ begin
   Group.DoRefresh2(Source, TransactionID, ActiveList)
 end;
 
+{ TRefreshMaxAgeTask }
+
+constructor TRefreshMaxAgeTask.Create(aGroup: TGroupImpl; aTransactionID: DWORD;
+  aMaxAge: DWORD);
+var
+  i: Integer;
+begin
+  inherited Create(aGroup, aTransactionID);
+  MaxAge:= aMaxAge;
+  GOpcItemServer.GetTimestamp(ActualTimestamp);
+  ActiveList:= TList.Create;
+  with Group do
+  for i:= 0 to FItemList.Count - 1 do
+    if FItemList[i].FActive then
+    begin
+      ActiveList.Add(FItemList[i]);
+    end;
+  if ActiveList.Count = 0 then
+  begin
+    Group.DeleteTask(Self);
+    Deleted:= true;
+    raise EOpcError.Create(E_FAIL)
+  end
+end;
+
+destructor TRefreshMaxAgeTask.Destroy;
+begin
+  ActiveList.Free;
+  inherited Destroy
+end;
+
+procedure TRefreshMaxAgeTask.Process;
+begin
+  Group.DoRefreshMaxAge(MaxAge, ActualTimestamp, TransactionID, ActiveList)
+end;
+
 { TRefreshTask1 }
 
 constructor TRefreshTask1.Create(aGroup: TGroupImpl; aSource: OPCDATASOURCE;
@@ -5470,14 +6603,14 @@ end;
 { TAsyncWriteTask1 }
 
 constructor TAsyncWriteTask1.Create(aGroup: TGroupImpl; aCount: DWORD;
-  phServer: POPCHANDLEARRAY; pValues: POleVariantArray);
+  phServer: POPCHANDLEARRAY; pValues: POleVariantArray;
+  ppErrors: PResultList; var Result: HResult);
 begin
-  inherited Create(aGroup, 0, aCount, phServer, pValues)
+  inherited Create(aGroup, 0, aCount, phServer, pValues, ppErrors, Result)
 end;
 
 procedure TAsyncWriteTask1.Process;
 var
-  i: Integer;
   GHW: POPCGROUPHEADERWRITE;
   IHW: POPCITEMHEADERWRITEARRAY;
   stgmed: TStgMedium;
@@ -5493,32 +6626,20 @@ begin
     tymed:= TYMED_HGLOBAL
   end;
   stgmed.tymed:= TYMED_HGLOBAL;
-  StreamSize:= SizeOf(OPCGROUPHEADERWRITE) + Count * SizeOf(OPCITEMHEADERWRITE);
+  StreamSize:= SizeOf(OPCGROUPHEADERWRITE) + ValidCount * SizeOf(OPCITEMHEADERWRITE);
   stgmed.hGlobal:= GlobalAlloc(GMEM_FIXED, StreamSize);
   stgmed.UnkForRelease:= nil;
   try
     GHW:= POPCGROUPHEADERWRITE(stgmed.hGlobal);
     with GHW^ do
     begin
-      dwItemCount:= Count;
+      dwItemCount:= ValidCount;
       hClientGroup:= Group.hClientGroup;
       dwTransactionID:= TransactionID;
       hrStatus:= S_OK
     end;
     IHW:= POPCITEMHEADERWRITEARRAY(stgmed.hGlobal + SizeOf(OPCGROUPHEADERWRITE));
-    for i:= 0 to Count - 1 do
-    with IHW^[i] do
-    begin
-      try
-        Group.ValidateServerHandle(Cardinal(GroupItem[i]));  {cf 1.13.10}
-        hClient:= GroupItem[i].FhClient;
-        GroupItem[i].ServerItem.SetItemValue(Values[i]);
-        dwError:= S_OK
-      except
-        on E: EOpcError do
-          dwError:= E.ErrorCode
-      end
-    end;
+    ProcessItems(nil, IHW);
     try
       with Group do
         if Assigned(FDa1Advise[da1WriteComplete]) then  {cf 1.14.7}
@@ -5532,25 +6653,41 @@ begin
   end;
 end;
 
+procedure TAsyncWriteTask1.ProcessItem(Item: TGroupItemImpl; IndexSrc,
+  IndexDst: Integer; var Data; var Status: HRESULT);
+var
+  IHW: POPCITEMHEADERWRITEARRAY absolute Data;
+begin
+  with IHW^[IndexDst] do
+  begin
+    try
+      hClient:= Item.FhClient;
+      Item.ServerItem.SetItemValue(Values[IndexSrc]);
+      dwError:= S_OK
+    except
+      on E: EOpcError do
+        dwError:= E.ErrorCode
+    end
+  end;
+end;
+
 { TAsyncReadTask1 }
 
 constructor TAsyncReadTask1.Create(aGroup: TGroupImpl;
-  aCount: DWORD; phServer: POPCHANDLEARRAY; aSource: OPCDATASOURCE; aFormat: TDa1Format);
+  aCount: DWORD; phServer: POPCHANDLEARRAY; aSource: OPCDATASOURCE;
+  aFormat: TDa1Format; ppErrors: PResultList; var Result: HResult);
 begin
-  inherited Create(aGroup, 0, aCount, phServer);
+  inherited Create(aGroup, 0, aCount, phServer, ppErrors, Result);
   Format:= aFormat;
   Source:= aSource
 end;
 
 procedure TAsyncReadTask1.Process;
 var
-  Value: OleVariant;
   stgmed: TStgMedium;
   Fe: TFormatEtc;
   Stream: TDataChangeStream;
-  Timestamp: TFiletime;
   Status: HRESULT;
-  i: Integer;
 begin
   Stream:= CreateStream;
   try
@@ -5564,39 +6701,11 @@ begin
     end;
     with Stream.GroupHeader^ do
     begin
-      dwItemCount:= Count;
+      dwItemCount:= ValidCount;
       hClientGroup:= Group.hClientGroup;
       dwTransactionID:= DWORD(Self)
     end;
-    Status:= S_OK;
-    for i:= 0 to Count - 1 do
-    begin
-      with Stream.ItemHeader2(i)^ do
-      begin
-        wReserved:= 0;
-        dwValueOffset:= Stream.Position;
-        Value:= Null;
-        hClient:= 0;
-        try
-          Group.ValidateServerHandle(Cardinal(GroupItem[i])); {cf 1.13.10}
-          hClient:= GroupItem[i].FhClient;
-          if Source = OPC_DS_DEVICE then
-            GroupItem[i].GetItemValue(Value, wQuality, Timestamp)
-          else
-            GroupItem[i].GetCacheValue(Value, wQuality, Timestamp);
-          Stream.SetTimestamp(i, Timestamp)
-        except
-          on EOpcError do
-            wQuality:= OPC_QUALITY_BAD
-        end;
-        if (Status = S_OK) and (wQuality <> OPC_QUALITY_GOOD) then
-          Status:= S_FALSE
-      end;
-      {note that any writes to the stream may alter the
-      base pointer, therefore we MUST NOT write to the
-      stream inside with Stream.ItemHeader1(i)^ do}
-      Stream.WriteVariant(Value)  {cf 1.13.12}
-    end;
+    Status:= ProcessItems(nil, Stream);
     with Stream.GroupHeader^ do
     begin
       dwSize:= Stream.Position;
@@ -5620,9 +6729,42 @@ end;
 function TAsyncReadTask1.CreateStream: TDataChangeStream;
 begin
   if Format = Da1DataTime then
-    Result:= TDataChangeStream1.Create(Count)
+    Result:= TDataChangeStream1.Create(ValidCount)
   else
-    Result:= TDataChangeStream2.Create(Count)
+    Result:= TDataChangeStream2.Create(ValidCount)
+end;
+
+procedure TAsyncReadTask1.ProcessItem(Item: TGroupItemImpl; IndexSrc,
+  IndexDst: Integer; var Data; var Status: HRESULT);
+var
+  Stream: TDataChangeStream absolute Data;
+  Value: OleVariant;
+  Timestamp: TFiletime;
+begin
+   with Stream.ItemHeader2(IndexSrc)^ do
+   begin
+     wReserved:= 0;
+     dwValueOffset:= Stream.Position;
+     Value:= Null;
+     hClient:= 0;
+     try
+       hClient:= Item.FhClient;
+       if Source = OPC_DS_DEVICE then
+         Item.GetItemValue(Value, wQuality, Timestamp)
+       else
+         Item.GetCacheValue(Value, wQuality, Timestamp);
+       Stream.SetTimestamp(IndexDst, Timestamp)
+     except
+       on EOpcError do
+         wQuality:= OPC_QUALITY_BAD
+     end;
+     if (Status = S_OK) and (wQuality <> OPC_QUALITY_GOOD) then
+       Status:= S_FALSE
+   end;
+   {note that any writes to the stream may alter the
+   base pointer, therefore we MUST NOT write to the
+   stream inside with Stream.ItemHeader1(i)^ do}
+   Stream.WriteVariant(Value)  {cf 1.13.12}
 end;
 
 { TDataChangeStream }

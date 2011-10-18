@@ -27,29 +27,41 @@ interface
 uses
   SysUtils, Classes, Windows, TypInfo, ActiveX;
 
+const
+  MaxArraySize      = $2000000;
+
 type
   {OPC types shared across multiple definitions}
 {  TOleEnum          = type Integer; }
 
   OPCHANDLE         = DWORD;
   POPCHANDLE        = ^OPCHANDLE;
-  OPCHANDLEARRAY    = array[0..65535] of OPCHANDLE;
+  OPCHANDLEARRAY    = array[0..MaxArraySize] of OPCHANDLE;
   POPCHANDLEARRAY   = ^OPCHANDLEARRAY;
 
   PVarType          = ^TVarType;
-  TVarTypeList      = array[0..65535] of TVarType;
+  TVarTypeList      = array[0..MaxArraySize] of TVarType;
   PVarTypeList      = ^TVarTypeList;
 
   POleVariant       = ^OleVariant;
-  OleVariantArray   = array[0..65535] of OleVariant;
+  OleVariantArray   = array[0..MaxArraySize] of OleVariant;
   POleVariantArray  = ^OleVariantArray;
 
   PLCID             = ^TLCID;
 
-  DWORDARRAY        = array[0..65535] of DWORD;
+  BOOLARRAY         = array[0..MaxArraySize] of BOOL;
+  PBOOLARRAY        = ^BOOLARRAY;
+
+  WORDARRAY         = array[0..MaxArraySize] of Word;
+  PWORDARRAY        = ^WORDARRAY;
+
+  DWORDARRAY        = array[0..MaxArraySize] of DWORD;
   PDWORDARRAY       = ^DWORDARRAY;
 
-  TFileTimeArray    = array[0..65535] of TFileTime;
+  SingleArray       = array[0..MaxArraySize] of Single;
+  PSingleArray      = ^SingleArray;
+
+  TFileTimeArray    = array[0..MaxArraySize] of TFileTime;
   PFileTimeArray    = ^TFileTimeArray;
 
   {pascal types}

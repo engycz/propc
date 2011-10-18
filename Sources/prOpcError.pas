@@ -216,6 +216,70 @@ const
   //
   OPC_E_INVALID_PID = HResult($C0040203);
 
+  //
+  // MessageId: OPC_E_DEADBANDNOTSET
+  //
+  // MessageText:
+  //
+  //  The item deadband has not been set for this item.
+  //
+  OPC_E_DEADBANDNOTSET = HResult($C0040400);
+
+  //
+  // MessageId: OPC_E_DEADBANDNOTSUPPORTED
+  //
+  // MessageText:
+  //
+  //  The item does not support deadband.
+  //
+  OPC_E_DEADBANDNOTSUPPORTED = HResult($C0040401);
+
+  //
+  // MessageId: OPC_E_NOBUFFERING
+  //
+  // MessageText:
+  //
+  //  The server does not support buffering of data items that are collected at
+  //  a faster rate than the group update rate.
+  //
+  OPC_E_NOBUFFERING = HResult($C0040402);
+
+  //
+  // MessageId: OPC_E_INVALIDCONTINUATIONPOINT
+  //
+  // MessageText:
+  //
+  //  The continuation point is not valid.
+  //
+  OPC_E_INVALIDCONTINUATIONPOINT = HResult($C0040403);
+
+  //
+  // MessageId: OPC_S_DATAQUEUEOVERFLOW
+  //
+  // MessageText:
+  //
+  //  Data Queue Overflow - Some value transitions were lost.
+  //
+  OPC_S_DATAQUEUEOVERFLOW = HResult($00040404);
+
+  //
+  // MessageId: OPC_E_RATENOTSET
+  //
+  // MessageText:
+  //
+  //  Server does not support requested rate.
+  //
+  OPC_E_RATENOTSET = HResult($C0040405);
+
+  //
+  // MessageId: OPC_E_NOTSUPPORTED
+  //
+  // MessageText:
+  //
+  //  The server does not support writing of quality and/or timestamp.
+  //
+  OPC_E_NOTSUPPORTED = HResult($C0040406);
+
 
 function StdOpcErrorToStr(Code: HRESULT; var Res: String): Boolean;
 {return true if found}
@@ -239,6 +303,13 @@ resourcestring
   S_OPC_E_INVALIDCONFIGFILE = 'The server''s configuration file is an invalid format.';
   S_OPC_E_NOTFOUND = 'The server could not locate the requested object.';
   S_OPC_E_INVALID_PID = 'The server does not recognise the passed property ID.';
+  S_OPC_E_DEADBANDNOTSET = 'The item deadband has not been set for this item.';
+  S_OPC_E_DEADBANDNOTSUPPORTED = 'The item does not support deadband.';
+  S_OPC_E_NOBUFFERING = 'The server does not support buffering of data items that are collected at a faster rate than the group update rate.';
+  S_OPC_E_INVALIDCONTINUATIONPOINT = 'The continuation point is not valid.';
+  S_OPC_S_DATAQUEUEOVERFLOW = 'Data Queue Overflow - Some value transitions were lost.';
+  S_OPC_E_RATENOTSET = 'Server does not support requested rate.';
+  S_OPC_E_NOTSUPPORTED = 'The server does not support writing of quality and/or timestamp.';
 
 function StdOpcErrorToStr(Code: HRESULT; var Res: string): Boolean;
 begin
@@ -260,6 +331,13 @@ begin
     OPC_E_INVALIDCONFIGFILE: Res:= S_OPC_E_INVALIDCONFIGFILE;
     OPC_E_NOTFOUND: Res:= S_OPC_E_NOTFOUND;
     OPC_E_INVALID_PID: Res:= S_OPC_E_INVALID_PID;
+    OPC_E_DEADBANDNOTSET: Res:= S_OPC_E_DEADBANDNOTSET;
+    OPC_E_DEADBANDNOTSUPPORTED: Res:= S_OPC_E_DEADBANDNOTSUPPORTED;
+    OPC_E_NOBUFFERING: Res:= S_OPC_E_NOBUFFERING;
+    OPC_E_INVALIDCONTINUATIONPOINT: Res:= S_OPC_E_INVALIDCONTINUATIONPOINT;
+    OPC_S_DATAQUEUEOVERFLOW: Res:= S_OPC_S_DATAQUEUEOVERFLOW;
+    OPC_E_RATENOTSET: Res:= S_OPC_E_RATENOTSET;
+    OPC_E_NOTSUPPORTED: Res:= S_OPC_E_NOTSUPPORTED;
   else
     Result:= false
   end
