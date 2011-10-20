@@ -672,22 +672,25 @@ begin
       {now enumerate the group to get the attributes} {cf cf 1.14.3}
       Fetched:= 0;
       ItemMgt.CreateEnumerator(IEnumOPCItemAttributes, EnumAttributes);
-      with EnumAttributes as IEnumOPCItemAttributes do
-        Next(ItemCount, Attributes, @Fetched);
-      try
-        for i:= 0 to Fetched - 1 do
-        begin
-          with Attributes^[i] do
-          begin
-            {Info:= PItemInfo(FItems.Objects[hClient]);}
-            Info:= GetItemInfo(Self, hClient);
-            Info^.EUType:= TEuType(dwEUType);
-            Info^.EUInfo:= vEUInfo
-          end
+      if EnumAttributes <> nil then
+      begin
+        with EnumAttributes as IEnumOPCItemAttributes do
+          Next(ItemCount, Attributes, @Fetched);
+        try
+          if Fetched > 0 then
+            for i:= 0 to Fetched - 1 do
+            begin
+              with Attributes^[i] do
+              begin
+                Info:= GetItemInfo(Self, hClient);
+                Info^.EUType:= TEuType(dwEUType);
+                Info^.EUInfo:= vEUInfo
+              end
+            end
+        finally
+          FreeOpcItemAttributesArray(Fetched, Attributes)
         end
-      finally
-        FreeOpcItemAttributesArray(Fetched, Attributes)
-      end
+      end;
     end;
     {is this a DA2 Group?}
     if FOpcGroup.QueryInterface(IConnectionPointContainer, CPC) = S_OK then
