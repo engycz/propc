@@ -91,6 +91,20 @@ type
     Error: HRESULT;
   end;
 
+  TServerStatus = record
+    StartTime:      TDateTime;
+    CurrentTime:    TDateTime;
+    LastUpdateTime: TDateTime;
+    ServerState:    OPCSERVERSTATE;
+    GroupCount:     DWORD;
+    BandWidth:      DWORD;
+    MajorVersion:   Word;
+    MinorVersion:   Word;
+    BuildNumber:    Word;
+    Reserved:       Word;
+    VendorInfo:     string;
+  end;
+
   TItemProperties = array of TItemProperty;
 
   TOpcGroup =
@@ -269,6 +283,7 @@ type
     procedure Disconnect;
     procedure DisconnectGroups;
     procedure BrowseItems(BrowseNodeEvent: TBrowseNodeEvent); virtual;
+    function GetServerStatus: TServerStatus;
     property ServerDesc: String read FServerDesc;
     property VendorName: String read FVendorName;
     property OpcServer: IOpcServer read FOpcServer;
@@ -1812,6 +1827,33 @@ begin
       BrowseBranch(nil)
     end;
   end;
+end;
+
+function TOpcSimpleClient.GetServerStatus: TServerStatus;
+var
+  ppServerStatus: POPCSERVERSTATUS;
+begin
+  if not Assigned(OpcServer) then
+    raise EOpcClient.CreateRes(@SNoOpcServer);
+
+  FillChar(Result, SizeOf(Result), 0);
+
+  ppServerStatus := nil;
+  OpcServer.GetStatus(ppServerStatus);
+
+  Result.StartTime := FileTimeToDateTime(ppServerStatus.ftStartTime);
+  Result.CurrentTime := FileTimeToDateTime(ppServerStatus.ftCurrentTime);
+  Result.LastUpdateTime := FileTimeToDateTime(ppServerStatus.ftLastUpdateTime);
+  Result.ServerState := ppServerStatus.dwServerState;
+  Result.GroupCount := ppServerStatus.dwGroupCount;
+  Result.BandWidth := ppServerStatus.dwBandWidth;
+  Result.MajorVersion := ppServerStatus.wMajorVersion;
+  Result.MinorVersion := ppServerStatus.wMinorVersion;
+  Result.BuildNumber := ppServerStatus.wBuildNumber;
+  Result.Reserved := ppServerStatus.wReserved;
+  Result.VendorInfo := ppServerStatus.szVendorInfo;
+
+  FreeServerStatus(ppServerStatus);
 end;
 
 { TDa1Sink }

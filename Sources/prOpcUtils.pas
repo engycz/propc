@@ -49,6 +49,8 @@ procedure FreeOleVariantArray(dwCount: Integer; pv: POleVariantArray);
 
 procedure FreeResultList(pv: PResultList);
 
+procedure FreeServerStatus(pv: POPCSERVERSTATUS);
+
 procedure FormatOPCStmDataTime(Stream: Pointer; var GroupHeader: POPCGROUPHEADER;
                                 var ItemHeaders: POPCITEMHEADER1ARRAY; var Data: DAVariant);
 procedure FormatOPCStmData(Stream: Pointer; var GroupHeader: POPCGROUPHEADER;
@@ -199,6 +201,11 @@ begin
     CoTaskMemFree(pv)
 end;
 
+procedure FreeServerStatus(pv: POPCSERVERSTATUS);
+begin
+  CoTaskMemFree(pv.szVendorInfo);
+  CoTaskMemFree(pv);
+end;
 
 type
   TDataPtr = record
