@@ -99,6 +99,7 @@ type
   protected
     function CreateNode: TTreeNode; override;
     procedure Change(Node: TTreeNode); override;
+    function BrowseNodeEvent(Parent: Pointer; const BrowseId, ItemId: string): Pointer;
   public
     function SelectedItemID: string;
     procedure Notification(AComponent: TComponent; Operation: TOperation); override;
@@ -195,6 +196,13 @@ begin
   Result:= TOpcNode.Create(Items)
 end;
 
+function TOpcBrowser.BrowseNodeEvent(Parent: Pointer; const BrowseId,
+  ItemId: string): Pointer;
+begin
+  Result:= Items.AddChild(Parent, BrowseID);
+  TOpcNode(Result).ItemId:= ItemId;
+end;
+
 class function TOpcBrowser.GetNodeItemID(Node: TTreeNode): string;
 begin
   if Assigned(Node) and (Node is TOpcNode) then
@@ -218,97 +226,13 @@ begin
 end;
 
 procedure TOpcBrowser.RefreshClient(aClient: TOpcSimpleClient);
-var
-  Server: IUnknown;
-  Browse: IOPCBrowseServerAddressSpace;
-  Enum: IEnumString;
-  HR: HRESULT;
-  Res: PWideChar;
-  Alloc: IMalloc;
-  C: WideChar;
-  NST: TOleEnum;
-
-function NewItem(Parent: TTreeNode; const DataID, ItemId: String): TTreeNode;
-begin
-  Result:= Items.AddChild(Parent, DataID);
-  TOpcNode(Result).ItemId:= ItemId
-end;
-
-procedure BrowseBranch(Parent: TTreeNode);
-var
-  Enum: IEnumString;
-  HR: HResult;
-  BrowseID: PWideChar;
-  ItemID: PWideChar;
-begin
-  HR:= Browse.BrowseOpcItemIds(OPC_LEAF, @C, VT_EMPTY, 0, Enum);
-  if HR <> S_FALSE then
-  begin
-    OleCheck(HR);
-    while Enum.Next(1, BrowseID, nil) = S_OK do
-    begin
-      OleCheck(Browse.GetItemID(BrowseID, ItemID));
-      NewItem(Parent, BrowseID, ItemID);
-      Alloc.Free(ItemID);
-      Alloc.Free(BrowseID)
-    end
-  end;
-  HR:= Browse.BrowseOpcItemIds(OPC_BRANCH, @C, VT_EMPTY, 0, Enum);
-  if HR <> S_FALSE then
-  begin
-    OleCheck(HR);
-    while Enum.Next(1, BrowseID, nil) = S_OK do
-    begin
-      OleCheck(Browse.ChangeBrowsePosition(OPC_BROWSE_DOWN, BrowseID));
-      BrowseBranch(NewItem(Parent, BrowseID, ''));
-      Alloc.Free(BrowseID);
-      OleCheck(Browse.ChangeBrowsePosition(OPC_BROWSE_UP, @C))
-    end
-  end
-end;
-
 begin
   {Don't do this at design time}
   if [csDesigning, csLoading] * ComponentState = [] then
   begin
     Items.Clear;
     if Assigned(aClient) then
-    begin
-      Server:= aClient.OpcServer;
-      if Assigned(Server) and
-         (Server.QueryInterface(IOpcBrowseServerAddressSpace, Browse) = S_OK) then
-      begin
-        C:= #0;
-        CoGetMalloc(1, Alloc);
-        OleCheck(Browse.QueryOrganization(NST));
-        if NST = OPC_NS_FLAT then
-        begin
-          HR:= Browse.BrowseOpcItemIds(OPC_FLAT, @C, VT_EMPTY, 0, Enum);
-          if HR <> S_FALSE then
-          begin
-            OleCheck(HR);
-            while Enum.Next(1, Res, nil) = S_OK do
-            begin
-              NewItem(nil, Res, Res);
-              Alloc.Free(Res)
-            end
-          end
-        end else
-        begin
-          HR:= Browse.ChangeBrowsePosition(OPC_BROWSE_TO, @C);
-          if HR = E_INVALIDARG then
-          begin
-            repeat
-              HR:= Browse.ChangeBrowsePosition(OPC_BROWSE_UP, @C)
-            until HR <> S_OK;
-          end else
-          begin
-            OleCheck(HR)
-          end;
-          BrowseBranch(nil)
-        end
-      end
-    end
+      aClient.BrowseItems(BrowseNodeEvent);
   end
 end;
 

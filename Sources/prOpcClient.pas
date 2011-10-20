@@ -81,6 +81,7 @@ type
 
   TWriteCompleteEvent = procedure(Sender: TOpcGroup; ItemIndex: Integer; Result: HRESULT) of object;
 
+  TBrowseNodeEvent = function (Parent: Pointer; const BrowseId, ItemId: string): Pointer of object;
 
   TItemProperty = record
     ID: DWORD;
@@ -267,6 +268,7 @@ type
     procedure ConnectGroups;
     procedure Disconnect;
     procedure DisconnectGroups;
+    procedure BrowseItems(BrowseNodeEvent: TBrowseNodeEvent); virtual;
     property ServerDesc: String read FServerDesc;
     property VendorName: String read FVendorName;
     property OpcServer: IOpcServer read FOpcServer;
@@ -1731,6 +1733,85 @@ begin
     for i:= 0 to Groups.Count - 1 do
       Groups[i].SortedItemList:= Value
   end
+end;
+
+procedure TOpcSimpleClient.BrowseItems(BrowseNodeEvent: TBrowseNodeEvent);
+var
+  Browse: IOPCBrowseServerAddressSpace;
+  Enum: IEnumString;
+  HR: HRESULT;
+  Res: PWideChar;
+  Alloc: IMalloc;
+  C: WideChar;
+  NST: TOleEnum;
+{===}
+procedure BrowseBranch(Parent: Pointer);
+var
+  Enum: IEnumString;
+  HR: HResult;
+  BrowseID: PWideChar;
+  ItemID: PWideChar;
+begin
+  HR:= Browse.BrowseOpcItemIds(OPC_LEAF, @C, VT_EMPTY, 0, Enum);
+  if HR <> S_FALSE then
+  begin
+    OleCheck(HR);
+    while Enum.Next(1, BrowseID, nil) = S_OK do
+    begin
+      OleCheck(Browse.GetItemID(BrowseID, ItemID));
+      BrowseNodeEvent(Parent, BrowseID, ItemID);
+      Alloc.Free(ItemID);
+      Alloc.Free(BrowseID)
+    end
+  end;
+  HR:= Browse.BrowseOpcItemIds(OPC_BRANCH, @C, VT_EMPTY, 0, Enum);
+  if HR <> S_FALSE then
+  begin
+    OleCheck(HR);
+    while Enum.Next(1, BrowseID, nil) = S_OK do
+    begin
+      OleCheck(Browse.ChangeBrowsePosition(OPC_BROWSE_DOWN, BrowseID));
+      BrowseBranch(BrowseNodeEvent(Parent, BrowseID, ''));
+      Alloc.Free(BrowseID);
+      OleCheck(Browse.ChangeBrowsePosition(OPC_BROWSE_UP, @C))
+    end
+  end
+end;
+{===}
+begin
+  if Assigned(OpcServer) and
+     (OpcServer.QueryInterface(IOpcBrowseServerAddressSpace, Browse) = S_OK) then
+  begin
+    C:= #0;
+    CoGetMalloc(1, Alloc);
+    OleCheck(Browse.QueryOrganization(NST));
+    if NST = OPC_NS_FLAT then
+    begin
+      HR:= Browse.BrowseOpcItemIds(OPC_FLAT, @C, VT_EMPTY, 0, Enum);
+      if HR <> S_FALSE then
+      begin
+        OleCheck(HR);
+        while Enum.Next(1, Res, nil) = S_OK do
+        begin
+          BrowseNodeEvent(nil, Res, Res);
+          Alloc.Free(Res)
+        end
+      end
+    end else
+    begin
+      HR:= Browse.ChangeBrowsePosition(OPC_BROWSE_TO, @C);
+      if HR = E_INVALIDARG then
+      begin
+        repeat
+          HR:= Browse.ChangeBrowsePosition(OPC_BROWSE_UP, @C)
+        until HR <> S_OK;
+      end else
+      begin
+        OleCheck(HR)
+      end;
+      BrowseBranch(nil)
+    end;
+  end;
 end;
 
 { TDa1Sink }
