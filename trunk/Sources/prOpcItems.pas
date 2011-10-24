@@ -223,23 +223,35 @@ end;
 
 procedure TOPCDataItem.InternalSetVQT(aValue: Variant; aQuality: Word;
   aTimeStamp: TFileTime);
+var
+  NeedUpdate : Boolean;
 begin
+  NeedUpdate := False;
+
   if FValue <> aValue then
-    VariantChangeType(FValue, aValue, 0, FVarType);
+   begin
+     VariantChangeType(FValue, aValue, 0, FVarType);
+     NeedUpdate := True;
+   end;
 
   if FQuality <> aQuality then
    begin
      FQuality := aQuality;
 
      FQualityGood := FQuality = OPC_QUALITY_GOOD;
+
+     NeedUpdate := True;
    end;
 
-  if Int64(aTimeStamp) = Int64(TimestampNotSet) then
-   GetSystemTimeAsFileTime(FTimestamp)
-  else
-   FTimestamp := aTimestamp;
+  if NeedUpdate then
+   begin
+     if Int64(aTimeStamp) = Int64(TimestampNotSet) then
+      GetSystemTimeAsFileTime(FTimestamp)
+     else
+      FTimestamp := aTimestamp;
 
-  UpdateValue;
+     UpdateValue;
+   end;
 end;
 
 procedure TOPCDataItem.UpdateValue;
