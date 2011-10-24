@@ -855,7 +855,7 @@ type
     procedure SetActive(Value: Boolean);
     constructor CreateClone(aOwner: TGroupImpl; Source: TGroupItemImpl);
     procedure AssignTo(var Result: OPCITEMATTRIBUTES);
-    procedure ItemCallback(const Value: OleVariant; Quality: Word);
+    procedure ItemCallback(const Value: OleVariant; Quality: Word; Timestamp: TFiletime);
     procedure GetItemValue(var Result: OleVariant; var Quality: Word; var Timestamp: TFiletime);
     procedure GetCacheValue(var Result: OleVariant; var Quality: Word; var Timestamp: TFiletime);
     procedure GetMaxAgeValue(MaxAge: Cardinal; ActualTimestamp: TFileTime; var Result: OleVariant;
@@ -5740,11 +5740,10 @@ begin
     CacheValue := Value;
     CacheQuality := Quality;
     if Int64(TimeStamp) = Int64(TimestampNotSet) then
-      GOpcItemServer.GetTimestamp(CacheTimestamp)
-    else
-      CacheTimestamp := TimeStamp;
+      GOpcItemServer.GetTimestamp(Timestamp);
+    CacheTimestamp := TimeStamp;
     for i:= 0 to Count - 1 do
-      TGroupItemImpl(Items[i]).ItemCallback(Value, Quality)
+      TGroupItemImpl(Items[i]).ItemCallback(Value, Quality, Timestamp)
   finally
     UnlockRefList
   end
@@ -6021,11 +6020,8 @@ begin
   CacheUpdated:= true
 end;
 
-procedure TGroupItemImpl.ItemCallback(const Value: OleVariant; Quality: Word);
-var
-  Timestamp: TFileTime;
+procedure TGroupItemImpl.ItemCallback(const Value: OleVariant; Quality: Word; Timestamp: TFiletime);
 begin
-  GOpcItemServer.GetTimestamp(Timestamp);
   if UpdateCache(Value, Quality, Timestamp) then
     CacheUpdated:= true
 end;
@@ -6104,7 +6100,7 @@ function TGroupItemImpl.UpdateCache(const Value: OleVariant;
         Result:= false;
         {timestamp must be updated. This seems odd, but is required by
          Section 4.5.1.6 of DA spec}
-        GOpcItemServer.GetTimestamp(CacheTimestamp) {cf 1.14.28}
+        CacheTimestamp := Timestamp;
       end
     end else
     begin
