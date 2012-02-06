@@ -105,6 +105,8 @@ type
     VendorInfo:     string;
   end;
 
+  TUpdateType = (umNone, umSync, umASync);
+
   TItemProperties = array of TItemProperty;
 
   TOpcGroup =
@@ -127,7 +129,7 @@ type
 
     FAccessPath: string;
     FUpdateList: TList;
-    FUpdating: (umNone, umSync, umASync);
+    FUpdating: TUpdateType;
     FOnDataChange: TDataChangeEvent;
     FOnWriteComplete: TWriteCompleteEvent;
     procedure SetItems(Value: TStrings);
