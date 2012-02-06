@@ -27,6 +27,7 @@ type
     OKBtn: TButton;
     CancelBtn: TButton;
     procedure FormCloseQuery(Sender: TObject; var CanClose: Boolean);
+    procedure ListDblClick(Sender: TObject);
   private
   public
     function Execute(Client: TOpcSimpleClient;
@@ -47,7 +48,7 @@ resourcestring
 
 function TServerSelectDlg.Execute(Client: TOpcSimpleClient; Options: TServerSearchOptions): Boolean;
 const
-  NDATypes: array[TOpcDataAccessType] of String = ('DA1', 'DA2');
+  NDATypes: array[TOpcDataAccessType] of String = ('DA1', 'DA2', 'DA3');
 var
   SL: TOpcServerList;
   i: Integer;
@@ -67,7 +68,8 @@ begin
       for i:= 0 to Length(SL) - 1 do
       with List.Items.Add do
       begin
-        Caption:= SL[i].ProgID;
+//        Caption:= SL[i].ProgID;
+        Caption:= SL[i].VerIndProgID;
         SubItems.Add(SL[i].UserType);
         dt:= SL[i].DaTypes;
         DAStr:= '';
@@ -94,7 +96,7 @@ begin
       Result:= false;
       MessageDlg(E.Message, mtError, [mbOK], 0)
     end
-  end
+  end;
 end;
 
 procedure TServerSelectDlg.FormCloseQuery(Sender: TObject;
@@ -105,6 +107,11 @@ begin
     CanClose:= false;
     MessageDlg(SPleaseSelect, mtConfirmation, [mbOK], 0)
   end
+end;
+
+procedure TServerSelectDlg.ListDblClick(Sender: TObject);
+begin
+  OKBtn.Click;
 end;
 
 end.

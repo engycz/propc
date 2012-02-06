@@ -1,35 +1,38 @@
 object ServerSelectDlg: TServerSelectDlg
-  Left = 317
-  Top = 258
-  BorderStyle = bsDialog
+  Left = 554
+  Top = 261
+  Width = 742
+  Height = 292
   Caption = 'Select Server'
-  ClientHeight = 262
-  ClientWidth = 607
   Color = clBtnFace
   Font.Charset = DEFAULT_CHARSET
   Font.Color = clWindowText
-  Font.Height = -13
+  Font.Height = -10
   Font.Name = 'MS Sans Serif'
   Font.Style = []
   OldCreateOrder = False
   Position = poScreenCenter
   OnCloseQuery = FormCloseQuery
-  PixelsPerInch = 120
-  TextHeight = 16
+  DesignSize = (
+    726
+    256)
+  PixelsPerInch = 96
+  TextHeight = 13
   object List: TListView
     Left = 0
     Top = 0
-    Width = 607
-    Height = 193
+    Width = 726
+    Height = 200
     Align = alTop
+    Anchors = [akLeft, akTop, akRight, akBottom]
     Columns = <
       item
         Caption = 'Prog ID'
-        Width = 150
+        Width = 200
       end
       item
         Caption = 'User'
-        Width = 150
+        Width = 200
       end
       item
         Caption = 'DA Support'
@@ -39,25 +42,31 @@ object ServerSelectDlg: TServerSelectDlg
         Caption = 'Vendor'
         Width = 200
       end>
+    GridLines = True
+    ReadOnly = True
     RowSelect = True
+    SortType = stText
     TabOrder = 0
     ViewStyle = vsReport
+    OnDblClick = ListDblClick
   end
   object OKBtn: TButton
-    Left = 380
-    Top = 214
-    Width = 93
-    Height = 31
+    Left = 550
+    Top = 219
+    Width = 75
+    Height = 25
+    Anchors = [akRight, akBottom]
     Caption = 'OK'
     Default = True
     ModalResult = 1
     TabOrder = 1
   end
   object CancelBtn: TButton
-    Left = 495
-    Top = 214
-    Width = 92
-    Height = 31
+    Left = 643
+    Top = 219
+    Width = 75
+    Height = 25
+    Anchors = [akRight, akBottom]
     Cancel = True
     Caption = 'Cancel'
     ModalResult = 2
