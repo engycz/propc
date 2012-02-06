@@ -19,6 +19,7 @@ type
     Clsid: TGUID;
     ProgID: String;
     UserType: String;
+    VerIndProgID: String;
     Vendor: String;
     DaTypes: TOpcDataAccessTypes;
   end;
@@ -167,6 +168,12 @@ begin
       P^.UserType:= R.ReadString('');
       R.OpenKeyReadOnly('ProgID');
       P^.ProgID:= R.ReadString('');
+
+      if R.OpenKeyReadOnly(PushKey + '\' + Clsid + '\VersionIndependentProgID') then
+        P^.VerIndProgID := R.ReadString('')
+      else
+        P^.VerIndProgID := P^.ProgID;
+
       if R.OpenKeyReadOnly(BaseKey + '\' + P^.ProgID + '\Opc\Vendor') then
         P^.Vendor:= R.ReadString('')
     finally
@@ -218,8 +225,9 @@ var
   i: Integer;
 
 begin
-  CatID[OPCDA1]:= GuidToString(CATID_OPCDAServer10);
-  CatID[OPCDA2]:= GuidToString(CATID_OPCDAServer20);
+  CatID[opcDA1]:= GuidToString(CATID_OPCDAServer10);
+  CatID[opcDA2]:= GuidToString(CATID_OPCDAServer20);
+  CatID[opcDA3]:= GuidToString(CATID_OPCDAServer30);
   KeyNames:= TStringList.Create;
   R:= OpenReg(Host);
   try
@@ -244,13 +252,15 @@ end;
 
 procedure EnumServers;
 var
-  List: IOPCServerList;
-  Enum: IEnumGUID;
+//  List: IOPCServerList;
+//  Enum: IEnumGUID;
+  List: IOPCServerList2;
+  Enum: IOPCEnumGUID;
   NextClsid: TGUID;
 
 const
   CatIDs: array[TOpcDataAccessType] of PGUID =
-    (@CATID_OPCDAServer10, @CATID_OPCDAServer20);
+    (@CATID_OPCDAServer10, @CATID_OPCDAServer20, @CATID_OPCDAServer30);
 
 procedure AddClasses(DaType: TOpcDataAccessType);
 var
@@ -258,9 +268,10 @@ var
   Res: PServerListRec;
   szUserType: PWideChar;
   szProgID: PWideChar;
+  szVerIndProgID: PWideChar;
   i: Integer;
 begin
-  OleCheck(List.EnumClassesOfCategories(1, CatIDs[DaType], 0, nil, Enum));
+  OleCheck(List.EnumClassesOfCategories(1, PGUIDList(CatIDs[DaType]), 0, nil, Enum));
   while Enum.Next(1, NextClsid, Fetched) = S_OK do
   begin
     i:= IndexOfClsid(NextClsid);
@@ -270,29 +281,35 @@ begin
       Include(Res^.DaTypes, DaType)
     end else
     begin
-      OleCheck(List.GetClassDetails(NextClsid, szProgID, szUserType));
-      Res:= IncServerCount;
-      with Res^ do
-      begin
-        Clsid:= NextClsid;
-        ProgID:= WideCharToString(szProgID);
-        UserType:= WideCharToString(szUserType);
-        Vendor:= '';
-        DaTypes:= [DaType]
+      try
+        OleCheck(List.GetClassDetails(NextClsid, szProgID, szUserType, szVerIndProgID));
+        Res:= IncServerCount;
+        with Res^ do
+        begin
+          Clsid:= NextClsid;
+          ProgID:= WideCharToString(szProgID);
+          UserType:= WideCharToString(szUserType);
+          VerIndProgID:= WideCharToString(szVerIndProgID);
+          Vendor:= '';
+          DaTypes:= [DaType]
+        end;
+        CoTaskMemFree(szUserType);
+        CoTaskMemFree(szProgID);
+        CoTaskMemFree(szVerIndProgID);
+      except
       end;
-      CoTaskMemFree(szUserType);
-      CoTaskMemFree(szProgID)
     end
   end
 end;
 
 begin
   if IsLocalHost(Host) then
-    List:= CreateComObject(CLSID_OPCServerList) as IOPCServerList
+    List:= CreateComObject(CLSID_OPCServerList) as IOPCServerList2
   else
-    List:= CreateRemoteComObject(Host, CLSID_OPCServerList) as IOPCServerList;
+    List:= CreateRemoteComObject(Host, CLSID_OPCServerList) as IOPCServerList2;
   AddClasses(opcDA1);
-  AddClasses(opcDA2)
+  AddClasses(opcDA2);
+  AddClasses(opcDA3)
 end;
 
 begin
@@ -309,22 +326,25 @@ procedure GetServerInfoWithOpcEnum(const Host, ProgID: String;
                                var Clsid: TGUID;
                                var UserType: String);
 var
-  List: IOPCServerList;
+//  List: IOPCServerList;
+  List: IOPCServerList2;
   WProgID: WideString;
   PUserType: PWideChar;
   PProgID: PWideChar;
+  PVerIndProgID: PWideChar;
 
 begin
   if IsLocalHost(Host) then
-    List:= CreateComObject(CLSID_OPCServerList) as IOPCServerList
+    List:= CreateComObject(CLSID_OPCServerList) as IOPCServerList2
   else
-    List:= CreateRemoteComObject(Host, CLSID_OPCServerList) as IOPCServerList;
+    List:= CreateRemoteComObject(Host, CLSID_OPCServerList) as IOPCServerList2;
   WProgID:= ProgID;
   List.CLSIDFromProgID(PWideChar(WProgID), Clsid);
-  List.GetClassDetails(Clsid, PProgID, PUserType);
+  List.GetClassDetails(Clsid, PProgID, PUserType, PVerIndProgID);
   UserType:= PUserType;
   CoTaskMemFree(PUserType);
-  CoTaskMemFree(PProgID)
+  CoTaskMemFree(PProgID);
+  CoTaskMemFree(PVerIndProgID);
 end;
 
 procedure GetServerInfo(const Host, ProgID: String;

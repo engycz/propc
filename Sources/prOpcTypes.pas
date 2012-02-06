@@ -68,7 +68,7 @@ type
   TAccessRight = (iaRead, iaWrite);
   TAccessRights = set of TAccessRight;
 
-  TOpcDataAccessType = (opcDA1, opcDA2);
+  TOpcDataAccessType = (opcDA1, opcDA2, opcDA3);
   TOpcDataAccessTypes = set of TOpcDataAccessType;
 
   TEuType = (euNone, euAnalog, euEnumerated);
@@ -108,6 +108,7 @@ type
 function OpcAccessRights(AccessRights: TAccessRights): DWORD;
 function NativeAccessRights(OpcRights: DWORD): TAccessRights;
 function FileTimeToDateTime( const Ft: TFiletime): TDateTime;
+function DateTimeToFileTime( const Dt: TDateTime): TFileTime;
 function IsSupportedVarType( Vtype: Integer): Boolean;
 
 implementation
@@ -134,6 +135,14 @@ var
 begin
   FiletimeToSystemTime(Ft, St);
   Result:= SystemTimeToDateTime(St)
+end;
+
+function DateTimeToFileTime( const Dt: TDateTime): TFileTime;
+var
+  St: TSystemTime;
+begin
+  DateTimeToSystemTime(Dt, St);
+  SystemTimeToFileTime(St, Result);
 end;
 
 function IsSupportedVarType( Vtype: Integer): Boolean;

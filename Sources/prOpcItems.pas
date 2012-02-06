@@ -394,7 +394,16 @@ procedure TOPCDataItemServer.SetItemValue(ItemHandle: TItemHandle;
 begin
   if CheckItemHandle(ItemHandle) then
    if Assigned(TOPCDataItem(ItemHandle).OnWrite) then
-    TOPCDataItem(ItemHandle).OnWrite(TOPCDataItem(ItemHandle), Value)
+    begin
+      try
+        if not TOPCDataItem(ItemHandle).OnWrite(TOPCDataItem(ItemHandle), Value) then
+         raise EOpcError.Create(OPC_E_RANGE)
+      except
+        raise EOpcError.Create(OPC_E_RANGE)
+      end
+    end
+   else
+    EOpcError.Create(OPC_E_BADRIGHTS)
   else
     raise EOpcError.Create(OPC_E_INVALIDHANDLE)
 end;

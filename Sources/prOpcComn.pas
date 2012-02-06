@@ -28,6 +28,8 @@ const
   IID_IOPCCommon: TIID = '{F31DFDE2-07B6-11D2-B2D8-0060083BA1FB}';
   IID_IOPCShutdown: TIID = '{F31DFDE1-07B6-11D2-B2D8-0060083BA1FB}';
   IID_IOPCServerList: TIID = '{13486D50-4821-11D2-A494-3CB306C10000}';
+  IID_IOPCEnumGUID: TIID = '{55C382C8-21C7-4e88-96C1-BECFB1E3F483}';
+  IID_IOPCServerList2: TIID = '{9DD0B56C-AD9E-43ee-8305-487F3188BF7A}';
 
   CLSID_OPCServerList: TGUID = '{13486D51-4821-11D2-A494-3CB306C10000}';
 
@@ -39,6 +41,8 @@ type
   IOPCCommon = interface;
   IOPCShutdown = interface;
   IOPCServerList = interface;
+  IOPCEnumGUID = interface;
+  IOPCServerList2 = interface;
 
 // *********************************************************************//
 // Declaration of structures, unions and aliases.                       //
@@ -84,14 +88,53 @@ type
     ['{13486D50-4821-11D2-A494-3CB306C10000}']
     function EnumClassesOfCategories(
             cImplemented:               ULONG;
-            rgcatidImpl:                PGUID;
+            rgcatidImpl:                PGUIDList;
             cRequired:                  ULONG;
-            rgcatidReq:                 PGUID;
+            rgcatidReq:                 PGUIDList;
       out   ppenumClsid:                IEnumGUID): HResult; stdcall;
     function GetClassDetails(
       const clsid:                      TCLSID;
       out   ppszProgID:                 POleStr;
       out   ppszUserType:               POleStr): HResult; stdcall;
+    function CLSIDFromProgID(
+            szProgId:                   POleStr;
+      out   clsid:                      TCLSID): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IOPCEnumGUID
+// GUID:      {55C382C8-21C7-4e88-96C1-BECFB1E3F483}
+// *********************************************************************//
+  IOPCEnumGUID = interface(IUnknown)
+    ['{55C382C8-21C7-4e88-96C1-BECFB1E3F483}']
+    function Next(
+            celt:                       UINT;
+      out   rgelt:                      TGUID;
+      out   pceltFetched:               UINT): HResult; stdcall;
+    function Skip(
+            celt:                       UINT): HResult; stdcall;
+    function Reset: HResult; stdcall;
+    function Clone(
+      out   ppenum:                     IOPCEnumGUID): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IOPCServerList2
+// GUID:      {9DD0B56C-AD9E-43ee-8305-487F3188BF7A}
+// *********************************************************************//
+  IOPCServerList2 = interface(IUnknown)
+    ['{9DD0B56C-AD9E-43ee-8305-487F3188BF7A}']
+    function EnumClassesOfCategories(
+            cImplemented:               ULONG;
+            rgcatidImpl:                PGUIDList;
+            cRequired:                  ULONG;
+            rgcatidReq:                 PGUIDList;
+      out   ppenumClsid:                IOPCEnumGUID): HResult; stdcall;
+    function GetClassDetails(
+      const clsid:                      TCLSID;
+      out   ppszProgID:                 POleStr;
+      out   ppszUserType:               POleStr;
+      out   ppszVerIndProgID:           POleStr): HResult; stdcall;
     function CLSIDFromProgID(
             szProgId:                   POleStr;
       out   clsid:                      TCLSID): HResult; stdcall;

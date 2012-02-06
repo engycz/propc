@@ -288,7 +288,8 @@ implementation
 
 resourcestring
   S_OPC_E_INVALIDHANDLE = 'The value of the handle is invalid.';
-  S_OPC_E_BADTYPE = 'requested data type and the canonical data type.';
+  S_OPC_E_BADTYPE = 'The server cannot convert the data between the'+#13+
+                    'requested data type and the canonical data type.';
   S_OPC_E_PUBLIC = 'The requested operation cannot be done on a public group.';
   S_OPC_E_BADRIGHTS = 'The Items AccessRights do not allow the operation.';
   S_OPC_E_UNKNOWNITEMID = 'The item is no longer available in the server address space.';
