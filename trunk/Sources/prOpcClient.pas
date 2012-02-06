@@ -302,6 +302,22 @@ type
     property OnServerShutdown: TNotifyEvent read FOnServerShutdown write FOnServerShutdown;
   end;
 
+  TOpcSimpleDA3Client = class(TOpcSimpleClient)
+  private
+    FUpdateList: TList;
+    FUpdating: TUpdateType;
+    function GetItemValue(ItemName: string): OleVariant;
+    procedure WriteItem(ItemName: string; const Value: OleVariant);
+    procedure ClearUpdateList;
+  public
+    constructor Create(aOwner: TComponent); override;
+    destructor Destroy; override;
+    procedure BrowseItems(BrowseNodeEvent: TBrowseNodeEvent); override;
+    procedure BeginUpdate;
+    procedure EndUpdate; {flush all reads/writes since BeginUpdate}
+    property ItemValue[ItemName: string]: OleVariant read GetItemValue write WriteItem;
+  end;
+
   EOpcClient = class(Exception)
     constructor CreateHResult(aClient: TOpcSimpleClient; Res: HRESULT);
   end;
@@ -335,6 +351,7 @@ resourcestring
   SCannotFindClient = 'Group cannot find client';
   SNoOpcServer = 'Opc server is not assigned';
   SBadlyFormedEUInfo = 'Server provided EUInfo incorrect type';
+  SIOPCItemIONotSupported = 'Server does not support IOPCItemIO';
 
 var
   Da1DataTimeFormat: Longint = 0;
@@ -408,6 +425,12 @@ type
   PUpdateInfo = ^TUpdateInfo;
   TUpdateInfo = record
     Index: Integer;
+    Value: OleVariant;
+  end;
+
+  PUpdateInfoDA3 = ^TUpdateInfoDA3;
+  TUpdateInfoDA3 = record
+    ItemID: WideString;
     Value: OleVariant;
   end;
 
@@ -1971,6 +1994,191 @@ begin
     Create(aClient.GetErrorString(Res))
   else
     Create(GetOpcErrorString(nil, Res))
+end;
+
+{ TOpcSimpleDA3Client }
+constructor TOpcSimpleDA3Client.Create(aOwner: TComponent);
+begin
+  inherited;
+  FUpdateList:= TList.Create;
+end;
+
+destructor TOpcSimpleDA3Client.Destroy;
+begin
+  ClearUpdateList;
+  FUpdateList.Free;
+  inherited;
+end;
+
+procedure TOpcSimpleDA3Client.BrowseItems(BrowseNodeEvent: TBrowseNodeEvent);
+var
+  Browse: IOpcBrowse;
+{===}
+procedure BrowseBranch(Parent: Pointer; ItemID: WideString);
+var
+  HR: HResult;
+  ContPoint: PWideChar;
+  MoreElements: LongBool;
+  Count: DWORD;
+  pBrowseElements: POPCBROWSEELEMENTARRAY;
+  DummyProp: DWORD;
+  I: Integer;
+begin
+  ContPoint := StringToLPOLESTR('');
+  try
+    HR:= Browse.Browse(PWideChar(ItemId), ContPoint, 0, OPC_BROWSE_FILTER_ALL,
+      '', '', False, False, 0, @DummyProp, MoreElements, Count, pBrowseElements);
+    OleCheck(HR);
+  finally
+    CoTaskMemFree(ContPoint);
+  end;
+
+  try
+    if Count > 0 then
+     for I := 0 to Count-1 do
+     begin
+       if pBrowseElements[I].dwFlagValue and OPC_BROWSE_HASCHILDREN <> 0 then
+         BrowseBranch(BrowseNodeEvent(Parent, pBrowseElements[I].szName, ''), pBrowseElements[I].szItemID);
+       if pBrowseElements[I].dwFlagValue and OPC_BROWSE_ISITEM <> 0 then
+         BrowseNodeEvent(Parent, pBrowseElements[I].szName, pBrowseElements[I].szItemID);
+     end;
+
+  finally
+    FreeOPCItemBrowseElementArray(Count, pBrowseElements);
+  end;
+end;
+{===}
+begin
+  if Assigned(OpcServer) and
+     (OpcServer.QueryInterface(IOpcBrowse, Browse) = S_OK) then
+  begin
+    BrowseBranch(nil, '');
+  end;
+end;
+
+function TOpcSimpleDA3Client.GetItemValue(ItemName: string): OleVariant;
+var
+  ItemIO: IOPCItemIO;
+  ItemID: WideString;
+  MaxAge: DWORD;
+  ppvValues:                  POleVariantArray;
+  ppwQualities:               PWordArray;
+  ppftTimeStamps:             PFileTimeArray;
+  ppErrors:                   PResultList;
+begin
+  if OpcServer.QueryInterface(IOpcItemIO, ItemIO) <> S_OK then
+    raise EOpcClient.CreateRes(@SIOPCItemIONotSupported);
+
+  ItemID := ItemName;
+  MaxAge := 0;
+  ItemIO.Read(1, @ItemID, @MaxAge, ppvValues, ppwQualities, ppftTimeStamps, ppErrors);
+  try
+    OpcCheck(ppErrors^[0]);
+    Result := ppvValues[0];
+  finally
+    FreeOleVariantArray(1, ppvValues);
+    CoTaskMemFree(ppwQualities);
+    CoTaskMemFree(ppftTimeStamps);
+    FreeResultList(ppErrors);
+  end;
+end;
+
+procedure TOpcSimpleDA3Client.WriteItem(ItemName: string; const Value: OleVariant);
+var
+  j: Integer;
+  Found: Boolean;
+  P: PUpdateInfoDA3;
+  ItemIO: IOPCItemIO;
+  ItemID: WideString;
+  ItemVQT: OPCITEMVQT;
+  ppErrors: PResultList;
+begin
+  if FUpdating <> umNone then
+  begin
+    Found:= false;
+    for j:= 0 to FUpdateList.Count - 1 do
+    begin
+      P:= Pointer(FUpdateList[j]);
+      if P^.ItemID = ItemName then
+      begin
+        P^.Value:= Value;
+        Found:= true;
+        break
+      end
+    end;
+    if not Found then
+    begin
+      New(P);
+      P^.ItemID:= ItemName;
+      P^.Value:= Value;
+      FUpdateList.Add(P)
+    end
+  end else
+  begin
+    if OpcServer.QueryInterface(IOpcItemIO, ItemIO) <> S_OK then
+      raise EOpcClient.CreateRes(@SIOPCItemIONotSupported);
+
+    ItemID := ItemName;
+    FillChar(ItemVQT, SizeOf(ItemVQT), 0);
+    ItemVQT.vDataValue := Value;
+    ItemIO.WriteVQT(1, @ItemID, @ItemVQT, ppErrors);
+    try
+      OpcCheck(ppErrors^[0]);
+    finally
+      FreeResultList(ppErrors);
+    end;
+  end;
+end;
+
+procedure TOpcSimpleDA3Client.BeginUpdate;
+begin
+  ClearUpdateList;
+  FUpdating:= umSync;
+end;
+
+procedure TOpcSimpleDA3Client.EndUpdate;
+var
+  i: Integer;
+  ppErrors: PResultList;
+  ItemCount: DWORD;
+  ItemIO: IOPCItemIO;
+  ItemIDs: array of WideString;
+  ItemVQTs: array of OPCITEMVQT;
+begin
+  FUpdating:= umNone;
+  ItemCount:= FUpdateList.Count;
+  if ItemCount > 0 then
+  begin
+    if OpcServer.QueryInterface(IOpcItemIO, ItemIO) <> S_OK then
+      raise EOpcClient.CreateRes(@SIOPCItemIONotSupported);
+
+    SetLength(ItemIDs, ItemCount);
+    SetLength(ItemVQTs, ItemCount);
+    for i:= 0 to ItemCount - 1 do
+    with PUpdateInfoDA3(FUpdateList[i])^ do
+    begin
+      ItemIDs[i]:= ItemID;
+      ItemVQTs[i].vDataValue := Value;
+    end;
+
+    OpcCheck(ItemIO.WriteVQT(ItemCount, Pointer(ItemIDs), Pointer(ItemVQTs), ppErrors));
+    try
+      for i := 0 to ItemCount - 1 do
+       OpcCheck(ppErrors^[i]);
+    finally
+      FreeResultList(ppErrors)
+    end;
+    ClearUpdateList;
+  end;
+end;
+
+procedure TOpcSimpleDA3Client.ClearUpdateList;
+var
+  i: Integer;
+begin
+  for i:= 0 to FUpdateList.Count - 1 do
+    Dispose(PUpdateInfo(FUpdateList[i]));
+  FUpdateList.Clear
 end;
 
 initialization
