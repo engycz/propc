@@ -1,7 +1,7 @@
 object ServerSelectDlg: TServerSelectDlg
-  Left = 554
-  Top = 261
-  Width = 742
+  Left = 680
+  Top = 238
+  Width = 540
   Height = 292
   Caption = 'Select Server'
   Color = clBtnFace
@@ -14,14 +14,14 @@ object ServerSelectDlg: TServerSelectDlg
   Position = poScreenCenter
   OnCloseQuery = FormCloseQuery
   DesignSize = (
-    726
+    524
     256)
   PixelsPerInch = 96
   TextHeight = 13
   object List: TListView
     Left = 0
     Top = 0
-    Width = 726
+    Width = 524
     Height = 200
     Align = alTop
     Anchors = [akLeft, akTop, akRight, akBottom]
@@ -37,10 +37,6 @@ object ServerSelectDlg: TServerSelectDlg
       item
         Caption = 'DA Support'
         Width = 100
-      end
-      item
-        Caption = 'Vendor'
-        Width = 200
       end>
     GridLines = True
     ReadOnly = True
@@ -51,7 +47,7 @@ object ServerSelectDlg: TServerSelectDlg
     OnDblClick = ListDblClick
   end
   object OKBtn: TButton
-    Left = 550
+    Left = 348
     Top = 219
     Width = 75
     Height = 25
@@ -62,7 +58,7 @@ object ServerSelectDlg: TServerSelectDlg
     TabOrder = 1
   end
   object CancelBtn: TButton
-    Left = 643
+    Left = 441
     Top = 219
     Width = 75
     Height = 25
