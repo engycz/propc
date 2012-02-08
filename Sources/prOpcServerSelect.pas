@@ -82,7 +82,7 @@ begin
             DAStr:= DAStr + ', ' + NDaTypes[j]
         end;
         SubItems.Add(DAStr);
-        SubItems.Add(SL[i].Vendor);
+//        SubItems.Add(SL[i].Vendor);
       end
     finally
       List.Items.EndUpdate
