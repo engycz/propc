@@ -60,6 +60,8 @@ procedure FormatOPCStmWriteComplete(Stream: Pointer; var GroupHeader: POPCGROUPH
 
 function GetMalloc: IMalloc;
 
+function GIT : IGlobalInterfaceTable;
+
 function DatatypeToStr(Datatype: Integer): string;
 function QualityToStr(Quality: Word): String;
 function AccessRightsToStr(AccessRights: DWORD): String;
@@ -76,6 +78,19 @@ uses
 
 resourcestring
   SUnknownError = 'Unknown error code %.8x';
+
+const
+  CLSID_StdGlobalInterfaceTable : TGUID = '{00000323-0000-0000-C000-000000000046}';
+
+function GIT : IGlobalInterfaceTable;
+const
+  cGIT : IGlobalInterfaceTable = NIL;
+begin
+  if (cGIT = NIL) then
+    OleCheck(CoCreateInstance(CLSID_StdGlobalInterfaceTable, NIL, CLSCTX_ALL,
+      IGlobalInterfaceTable, cGIT));
+  Result := cGIT;
+end;
 
 function GetMalloc: IMalloc;
 begin

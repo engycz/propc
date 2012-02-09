@@ -489,7 +489,7 @@ type
     procedure OnRemoveItem(Item: TGroupItemInfo); virtual;
     procedure OnItemValueChange(Item: TGroupItemInfo); virtual;    {cf 1.14.27}
 
-    procedure GroupCallbackError(Exception: EOleSysError; Group: TGroupInfo; Call: TGroupCallback); virtual; {cf 1.14.2}
+    procedure GroupCallbackError(Exception: EOleSysError; Group: TGroupInfo; Call: TGroupCallback); virtual; {cf 1.14.2} // Note: this function is called from different thread and Group should not exist if destroyed in main thread
     procedure ClientCallbackError(Exception: EOleSysError; Server: TClientInfo; Call: TClientCallback); virtual; {cf 1.14.2}
 
     {property support
@@ -569,6 +569,7 @@ type
     FDataChangeEnable: Boolean;
     FDeleted: Boolean;
     FDataCallback: IOPCDataCallback;
+    FDataCallbackCookie: DWORD;
     FPercentDeadband: Single;
     FDa1Advise: array[TDa1Format] of IAdviseSink;
   public
@@ -1382,6 +1383,76 @@ type
     function Clone(out enm: IEnumString): HResult; stdcall;
   end;
 
+  TAsyncCallbackOperation = class
+  private
+    InterfaceCookie: DWORD;
+    procedure DoExecute; virtual; abstract;
+  end;
+
+  TAsyncCallbackGroup = class(TAsyncCallbackOperation)
+  private
+  public
+    Group: TGroupInfo;
+    function GetDataCallback : IOPCDataCallback;
+  end;
+
+  TAsyncCallbackOnDataChange = class(TAsyncCallbackGroup)
+  private
+    procedure DoExecute; override;
+  public
+    TransactionID: DWORD;
+    hClientGroup: OPCHANDLE;
+    MasterQuality: HRESULT;
+    MasterError: HRESULT;
+    Count: Integer;
+    ClientHandles: array of OPCHANDLE;
+    Values: array of OleVariant;
+    Qualities: array of Word;
+    Timestamps: array of TFiletime;
+    Errors: array of HRESULT;
+  end;
+
+  TAsyncCallbackOnReadComplete = class(TAsyncCallbackGroup)
+  private
+    procedure DoExecute; override;
+  public
+    TransactionID: DWORD;
+    hClientGroup: OPCHANDLE;
+    MasterQuality: HRESULT;
+    MasterError: HRESULT;
+    Count: Integer;
+    ClientHandles: array of OPCHANDLE;
+    Values: array of OleVariant;
+    Qualities: array of Word;
+    Timestamps: array of TFiletime;
+    Errors: array of HRESULT;
+  end;
+
+  TAsyncCallbackOnWriteComplete = class(TAsyncCallbackGroup)
+  private
+    procedure DoExecute; override;
+  public
+    TransactionID: DWORD;
+    hClientGroup: OPCHANDLE;
+    MasterError: HRESULT;
+    Count: Integer;
+    ClientHandles: array of OPCHANDLE;
+    Errors: array of HRESULT;
+  end;
+
+  TAsyncCallbackThread = class(TThread)
+  private
+    FOperationList: TThreadList;
+    FTrigger: THandle;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create;
+    destructor Destroy; override;
+    procedure Invoke(Operation: TAsyncCallbackOperation);
+    procedure ClearOperationsOnInterface(InterfaceCookie: DWORD);
+  end;
+
   {Group reference counting is very complicated.
     See Documentation for IOPCServer.RemoveGroup. I am not
     sure I have implemented this properly &&&}
@@ -1392,6 +1463,7 @@ type
   private
     FBrowsePos: TItemIdList;
     FGroupList: TGroupList;
+    FAsyncCallbackThread: TAsyncCallbackThread;
     FConnectionPoint: TConnectionPoint;
 
     {OPC_STATUS_RUNNING
@@ -1968,7 +2040,7 @@ end;
 
 destructor TConnectionPoint.Destroy;
 begin
-  FSink:= nil;
+  Unadvise(0);
   inherited Destroy
 end;
 
@@ -2723,6 +2795,142 @@ begin
   Result:= Assigned(FOpcShutdown)
 end;
 
+{ TAsyncCallbackGroup }
+
+function TAsyncCallbackGroup.GetDataCallback: IOPCDataCallback;
+begin
+  OleCheck(GIT.GetInterfaceFromGlobal(InterfaceCookie, IOPCDataCallback, Result));
+end;
+
+{ TAsyncCallbackOnDataChange }
+
+procedure TAsyncCallbackOnDataChange.DoExecute;
+begin
+  try
+    OleCheck(GetDataCallback.OnDataChange(TransactionID, hClientGroup,
+     MasterQuality, MasterError, Count, Pointer(ClientHandles),
+     Pointer(Values), Pointer(Qualities), Pointer(Timestamps), Pointer(Errors)));
+  except
+    on E: EOleSysError do
+     GOpcItemServer.GroupCallbackError(E, Group, ccDa2DataChange);
+  end;
+end;
+
+{ TAsyncCallbackOnReadComplete }
+
+procedure TAsyncCallbackOnReadComplete.DoExecute;
+begin
+  try
+    OleCheck(GetDataCallback.OnReadComplete(TransactionID, hClientGroup,
+     MasterQuality, MasterError, Count, Pointer(ClientHandles),
+     Pointer(Values), Pointer(Qualities), Pointer(Timestamps), Pointer(Errors)));
+  except
+    on E: EOleSysError do
+     GOpcItemServer.GroupCallbackError(E, Group, ccDa2ReadComplete);
+  end;
+end;
+
+{ TAsyncCallbackOnWriteComplete }
+
+procedure TAsyncCallbackOnWriteComplete.DoExecute;
+begin
+  try
+    OleCheck(GetDataCallback.OnWriteComplete(TransactionID, hClientGroup,
+     MasterError, Count, Pointer(ClientHandles), Pointer(Errors)));
+  except
+    on E: EOleSysError do
+     GOpcItemServer.GroupCallbackError(E, Group, ccDa2WriteComplete);
+  end;
+end;
+
+{ TAsyncCallbackThread }
+
+constructor TAsyncCallbackThread.Create;
+begin
+  inherited Create(False);
+  FreeOnTerminate := True;
+  FTrigger := CreateEvent(nil, False, False, '');
+  FOperationList := TThreadList.Create;
+end;
+
+destructor TAsyncCallbackThread.Destroy;
+begin
+  CloseHandle(FTrigger);
+  with FOperationList.LockList do
+   while Count > 0 do
+    begin
+      TObject(TAsyncCallbackOperation(Items[0])).Free;
+      Delete(0);
+    end;
+  FOperationList.UnlockList;
+  FOperationList.Free;
+  inherited;
+end;
+
+procedure TAsyncCallbackThread.Execute;
+var
+  Operation : TAsyncCallbackOperation;
+begin
+  CoInitializeEx(nil, CoInitFlags);
+  repeat
+    WaitForSingleObject(FTrigger, 100);
+
+    repeat
+      Operation := nil;
+      with FOperationList.LockList do
+       try
+         if Count > 0 then
+          begin
+            Operation := TAsyncCallbackOperation(Items[0]);
+            Delete(0);
+          end
+       finally
+         FOperationList.UnlockList;
+       end;
+
+      if Operation <> nil then
+       begin
+         try
+           if Operation.InterfaceCookie <> $FFFFFFFF then
+            Operation.DoExecute;
+         except
+         end;
+         Operation.Free;
+       end;
+    until (Operation = nil) or Terminated;
+  until Terminated;
+end;
+
+procedure TAsyncCallbackThread.Invoke(Operation: TAsyncCallbackOperation);
+begin
+  FOperationList.Add(Operation);
+  SetEvent(FTrigger);
+end;
+
+procedure TAsyncCallbackThread.ClearOperationsOnInterface(InterfaceCookie: DWORD);
+var
+  I : Integer;
+  Operation : TAsyncCallbackOperation;
+begin
+  with FOperationList.LockList do
+   try
+     I := 0;
+     while I < Count do
+      begin
+        Operation := TAsyncCallbackOperation(Items[I]);
+        if Operation.InterfaceCookie = InterfaceCookie then
+         begin
+           Operation.Free;
+           Delete(I);
+         end
+        else
+         Inc(I);
+      end;
+   finally
+     FOperationList.UnlockList;
+   end;
+end;
+
 { TServerImpl }
 
 function TServerImpl.AddGroup(szName: POleStr; bActive: BOOL;
@@ -2921,6 +3129,7 @@ begin
   if FServerState = OPC_STATUS_RUNNING then
     SendMessage(OpcWindow, CM_NOTIFICATION, nfClientDisconnect, Integer(Self));
   FGroupList.Free; {what about dangling references?}
+  FAsyncCallbackThread.Terminate;
   FConnectionPoint.Free;
   inherited Destroy       {moved from start of destructor}
 end;
@@ -3600,6 +3809,7 @@ begin
     raise EOleSysError.Create('Too many clients', CLASS_E_NOTLICENSED, 0);
 {$ENDIF}
   FConnectionPoint:= TConnectionPoint.Create(Self, IOPCShutdown, SinkConnect);
+  FAsyncCallbackThread:= TAsyncCallbackThread.Create;
   FGroupList:= TGroupList.Create;
   FLCID:= LOCALE_SYSTEM_DEFAULT; {cf 1.01.1 was GetUserDefaultLCID}
   with LockServerList do
@@ -3859,8 +4069,7 @@ procedure TServerImpl.ForceDisconnect;
 var
   g: TGroupImpl;
 begin
-  FConnectionPoint.FSink:= nil;
-  FOpcShutdown:= nil;
+  FConnectionPoint.Unadvise(0);
   while FGroupList.Count > 0 do
   begin
     g:= FGroupList.Group(0);
@@ -4287,7 +4496,6 @@ begin
     but the odd missed tick won't hurt. The chances of finding any
     are remote anyway}
     while PeekMessage(Msg, OpcWindow, WM_TIMER, WM_TIMER, PM_REMOVE) do ;
-
   end;
   if FGroupKeepAlive <> nil then
   begin
@@ -4314,55 +4522,52 @@ end;
 procedure TGroupImpl.DoRefresh2( Source: OPCDATASOURCE; TransactionID: DWORD; ActiveList: TList);
 var
   i: Integer;
-  Count: Integer;
-  ClientHandles: array of OPCHANDLE;
-  Values: array of OleVariant;
-  Qualities: array of Word;
-  Timestamps: array of TFiletime;
-  Errors: array of HRESULT;
-  MasterError, MasterQuality: HRESULT;
-
+  AsyncCallbackOnDataChange: TAsyncCallbackOnDataChange;
 begin
   if Assigned(FDataCallback) and FActive then
   begin
-    Count:= ActiveList.Count;
-    SetLength(ClientHandles, Count);
-    SetLength(Values, Count);
-    SetLength(Qualities, Count);
-    SetLength(Timestamps, Count);
-    SetLength(Errors, Count);
-    MasterError:= S_OK;
-    MasterQuality:= S_OK;
-    for i:= 0 to Count - 1 do
-    with TGroupItemImpl(ActiveList[i]) do
+    AsyncCallbackOnDataChange:= TAsyncCallbackOnDataChange.Create;
+    AsyncCallbackOnDataChange.InterfaceCookie:= FDataCallbackCookie;
+    AsyncCallbackOnDataChange.Group:= Self;
+    AsyncCallbackOnDataChange.hClientGroup:= hClientGroup;
+    AsyncCallbackOnDataChange.TransactionID:= TransactionID;
+    AsyncCallbackOnDataChange.Count:= ActiveList.Count;
+    with AsyncCallbackOnDataChange do
     begin
-      Tick; // Clear cache changed
-      ClientHandles[i]:= FhClient;
-      try
-        if Source = OPC_DS_DEVICE then
-          GetItemValue(Values[i], Qualities[i], Timestamps[i])
-        else
-          GetCacheValue(Values[i], Qualities[i], Timestamps[i]);
-        Errors[i]:= S_OK;
-      except
-        on E: EOpcError do
-          Errors[i]:= E.ErrorCode;
+      SetLength(ClientHandles, Count);
+      SetLength(Values, Count);
+      SetLength(Qualities, Count);
+      SetLength(Timestamps, Count);
+      SetLength(Errors, Count);
+      MasterError:= S_OK;
+      MasterQuality:= S_OK;
+      for i:= 0 to Count - 1 do
+      with TGroupItemImpl(ActiveList[i]) do
+      begin
+        Tick; // Clear cache changed
+        ClientHandles[i]:= FhClient;
+        try
+          if Source = OPC_DS_DEVICE then
+            GetItemValue(Values[i], Qualities[i], Timestamps[i])
+          else
+            GetCacheValue(Values[i], Qualities[i], Timestamps[i]);
+          Errors[i]:= S_OK;
+        except
+          on E: EOpcError do
+            Errors[i]:= E.ErrorCode;
+        end;
+        if (MasterError = S_OK) and (Errors[i] <> S_OK) then
+          MasterError:= S_FALSE;
+        if (MasterQuality = S_OK) and (Qualities[i] and OPC_QUALITY_MASK <> OPC_QUALITY_GOOD) then
+          MasterQuality:= S_FALSE
       end;
-      if (MasterError = S_OK) and (Errors[i] <> S_OK) then
-        MasterError:= S_FALSE;
-      if (MasterQuality = S_OK) and (Qualities[i] <> OPC_QUALITY_GOOD) then
-        MasterQuality:= S_FALSE
-    end;
-    try   {try except cf 1.14.1}
-      FDataCallback.OnDataChange(TransactionID,
-       hClientGroup, MasterQuality, MasterError, Count, Pointer(ClientHandles),
-       Pointer(Values), Pointer(Qualities), Pointer(Timestamps), Pointer(Errors));
-      TServerImpl(FClientInfo).SetLastUpdate;
-      if FGroupKeepAlive <> nil then
-        FGroupKeepAlive.RestartTimer;
-    except
-      on E: EOleSysError do
-        GOpcItemServer.GroupCallbackError(E, Self, ccDa2DataChange)
+      try   {try except cf 1.14.1}
+        TServerImpl(FClientInfo).FAsyncCallbackThread.Invoke(AsyncCallbackOnDataChange);
+        TServerImpl(FClientInfo).SetLastUpdate;
+        if FGroupKeepAlive <> nil then
+          FGroupKeepAlive.RestartTimer;
+      except
+      end
     end
   end
 end;
@@ -4370,51 +4575,49 @@ end;
 procedure TGroupImpl.DoRefreshMaxAge(MaxAge: DWORD; ActualTimestamp: TFileTime; TransactionID: DWORD; ActiveList: TList);
 var
   i: Integer;
-  Count: Integer;
-  ClientHandles: array of OPCHANDLE;
-  Values: array of OleVariant;
-  Qualities: array of Word;
-  Timestamps: array of TFiletime;
-  Errors: array of HRESULT;
-  MasterError, MasterQuality: HRESULT;
+  AsyncCallbackOnDataChange: TAsyncCallbackOnDataChange;
 begin
   if Assigned(FDataCallback) and FActive then
   begin
-    Count:= ActiveList.Count;
-    SetLength(ClientHandles, Count);
-    SetLength(Values, Count);
-    SetLength(Qualities, Count);
-    SetLength(Timestamps, Count);
-    SetLength(Errors, Count);
-    MasterError:= S_OK;
-    MasterQuality:= S_OK;
-    for i:= 0 to Count - 1 do
-    with TGroupItemImpl(ActiveList[i]) do
+    AsyncCallbackOnDataChange:= TAsyncCallbackOnDataChange.Create;
+    AsyncCallbackOnDataChange.InterfaceCookie:= FDataCallbackCookie;
+    AsyncCallbackOnDataChange.Group:= Self;
+    AsyncCallbackOnDataChange.hClientGroup:= hClientGroup;
+    AsyncCallbackOnDataChange.TransactionID:= TransactionID;
+    AsyncCallbackOnDataChange.Count:= ActiveList.Count;
+    with AsyncCallbackOnDataChange do
     begin
-      Tick; // Clear cache changed
-      ClientHandles[i]:= FhClient;
-      try
-        GetMaxAgeValue(MaxAge, ActualTimestamp, Values[i], Qualities[i], Timestamps[i]);
-        Errors[i]:= S_OK;
-      except
-        on E: EOpcError do
-          Errors[i]:= E.ErrorCode;
+      SetLength(ClientHandles, Count);
+      SetLength(Values, Count);
+      SetLength(Qualities, Count);
+      SetLength(Timestamps, Count);
+      SetLength(Errors, Count);
+      MasterError:= S_OK;
+      MasterQuality:= S_OK;
+      for i:= 0 to Count - 1 do
+      with TGroupItemImpl(ActiveList[i]) do
+      begin
+        Tick; // Clear cache changed
+        ClientHandles[i]:= FhClient;
+        try
+          GetMaxAgeValue(MaxAge, ActualTimestamp, Values[i], Qualities[i], Timestamps[i]);
+          Errors[i]:= S_OK;
+        except
+          on E: EOpcError do
+            Errors[i]:= E.ErrorCode;
+        end;
+        if (MasterError = S_OK) and (Errors[i] <> S_OK) then
+          MasterError:= S_FALSE;
+        if (MasterQuality = S_OK) and (Qualities[i] and OPC_QUALITY_MASK <> OPC_QUALITY_GOOD) then
+          MasterQuality:= S_FALSE
       end;
-      if (MasterError = S_OK) and (Errors[i] <> S_OK) then
-        MasterError:= S_FALSE;
-      if (MasterQuality = S_OK) and (Qualities[i] <> OPC_QUALITY_GOOD) then
-        MasterQuality:= S_FALSE
-    end;
-    try   {try except cf 1.14.1}
-      FDataCallback.OnDataChange(TransactionID,
-       hClientGroup, MasterQuality, MasterError, Count, Pointer(ClientHandles),
-       Pointer(Values), Pointer(Qualities), Pointer(Timestamps), Pointer(Errors));
-      TServerImpl(FClientInfo).SetLastUpdate;
-      if FGroupKeepAlive <> nil then
-        FGroupKeepAlive.RestartTimer;
-    except
-      on E: EOleSysError do
-        GOpcItemServer.GroupCallbackError(E, Self, ccDa2DataChange)
+      try   {try except cf 1.14.1}
+        TServerImpl(FClientInfo).FAsyncCallbackThread.Invoke(AsyncCallbackOnDataChange);
+        TServerImpl(FClientInfo).SetLastUpdate;
+        if FGroupKeepAlive <> nil then
+          FGroupKeepAlive.RestartTimer;
+      except
+      end
     end
   end
 end;
@@ -4474,7 +4677,7 @@ begin
             on EOpcError do
               wQuality:= OPC_QUALITY_BAD
           end;
-          if (Status = S_OK) and (wQuality <> OPC_QUALITY_GOOD) then
+          if (Status = S_OK) and (wQuality and OPC_QUALITY_MASK <> OPC_QUALITY_GOOD) then
             Status:= S_FALSE
         end;
         {note that any writes to the stream may alter the
@@ -4720,22 +4923,6 @@ type
     ppftTimeStamps: PFileTimeArray;
   end;
 
-  PAsyncReadParam = ^TAsyncReadParam;
-  TAsyncReadParam = record
-    hClientItem: array of OPCHANDLE;
-    Qualities: array of Word;
-    Timestamps: array of TFiletime;
-    Values: array of OleVariant;
-  end;
-
-  PAsyncReadMaxAgeParam = ^TAsyncReadMaxAgeParam;
-  TAsyncReadMaxAgeParam = record
-    hClientItem: array of OPCHANDLE;
-    Qualities: array of Word;
-    Timestamps: array of TFiletime;
-    Values: array of OleVariant;
-  end;
-
 procedure TGroupImpl.ItemSyncIORead(Item: TGroupItemImpl; Index: Integer;
   Data: Pointer);
 var
@@ -4915,7 +5102,7 @@ begin
     CheckConnected;
     FDataChangeEnable:= bEnable;
     if bEnable then
-      Refresh2(OPC_DS_CACHE, 0, CancelID);
+      Refresh2(OPC_DS_DEVICE, 0, CancelID);
 {$IFDEF GLD}
     if FDataChangeEnable then
       SendDebug('Set enable TRUE')
@@ -5002,11 +5189,15 @@ begin
   if Connecting then
   begin
     FDataCallback:= Sink as IOPCDataCallback;
+    GIT.RegisterInterfaceInGlobal(FDataCallback, IOPCDataCallback, FDataCallbackCookie);
     if FDataChangeEnable and
        FActive then
       Refresh2(OPC_DS_DEVICE, 0, CancelID);
   end else
   begin
+    TServerImpl(FClientInfo).FAsyncCallbackThread.ClearOperationsOnInterface(FDataCallbackCookie);
+    GIT.RevokeInterfaceFromGlobal(FDataCallbackCookie);
+    FDataCallbackCookie:= $FFFFFFFF;
     FDataCallback:= nil
   end
 end;
@@ -5172,7 +5363,7 @@ begin
     begin
       if Assigned(FDataCallback) and
          FDataChangeEnable then
-        Refresh2(OPC_DS_CACHE, 0, CancelID) //?? DEVICE or CACHE?
+        Refresh2(OPC_DS_DEVICE, 0, CancelID)
       else
         for i:= 0 to FItemList.Count - 1 do
           FItemList[i].InvalidateCache;
@@ -5453,8 +5644,7 @@ procedure TGroupImpl.ForceDisconnect;
 var
   i: TDa1Format;
 begin
-  FConnectionPoint.FSink:= nil;
-  FDataCallback:= nil;
+  FConnectionPoint.Unadvise(0);
   for i:= Low(FDa1Advise) to High(FDa1Advise) do
     FDa1Advise[i]:= nil;
   CoDisconnectObject(Self, 0)
@@ -5516,12 +5706,32 @@ begin
 end;
 
 procedure TGroupKeepAlive.Tick;
+var
+  AsyncCallbackOnDataChange: TAsyncCallbackOnDataChange;
 begin
-  try
-    Group.FDataCallback.OnDataChange(0, Group.hClientGroup,
-      OPC_QUALITY_GOOD, S_OK, 0, nil, nil, nil, nil, nil);
-  finally
-  end;
+  if Assigned(Group.FDataCallback) then
+  begin
+    AsyncCallbackOnDataChange:= TAsyncCallbackOnDataChange.Create;
+    AsyncCallbackOnDataChange.InterfaceCookie:= Group.FDataCallbackCookie;
+    AsyncCallbackOnDataChange.Group:= Group;
+    AsyncCallbackOnDataChange.hClientGroup:= Group.hClientGroup;
+    with AsyncCallbackOnDataChange do
+    begin
+      // Allocate at least one client item, count=0
+      SetLength(ClientHandles, 1);
+      SetLength(Values, 1);
+      SetLength(Qualities, 1);
+      SetLength(Timestamps, 1);
+      SetLength(Errors, 1);
+
+      MasterError:= S_OK;
+      MasterQuality:= S_OK;
+      try
+        TServerImpl(Group.FClientInfo).FAsyncCallbackThread.Invoke(AsyncCallbackOnDataChange);
+      finally
+      end;
+    end
+  end
 end;
 
 { TServerItemRef }
@@ -6338,25 +6548,28 @@ end;
 
 procedure TAsyncWriteTask.Process;
 var
-  hClientItem: array of OPCHANDLE;
-  Errors: array of HRESULT;
-  MasterError: HRESULT;
+  AsyncCallbackOnWriteComplete: TAsyncCallbackOnWriteComplete;
 begin
-  SetLength(hClientItem, ValidCount);
-  SetLength(Errors, ValidCount);
-  MasterError:= ProcessItems(Pointer(Errors), hClientItem);
-  with Group do
-  if Assigned(FDataCallback) then
+  AsyncCallbackOnWriteComplete := TAsyncCallbackOnWriteComplete.Create;
+  AsyncCallbackOnWriteComplete.InterfaceCookie:= Group.FDataCallbackCookie;
+  AsyncCallbackOnWriteComplete.Group:= Group;
+  AsyncCallbackOnWriteComplete.hClientGroup:= Group.hClientGroup;
+  AsyncCallbackOnWriteComplete.TransactionID:= TransactionID;
+  AsyncCallbackOnWriteComplete.Count:= ValidCount;
+  with AsyncCallbackOnWriteComplete do
   begin
-    try   {try except cf 1.14.4}
-      FDataCallback.OnWriteComplete(TransactionID,
-          hClientGroup, MasterError, ValidCount,
-          Pointer(hClientItem), Pointer(Errors))
-    except
-      on E: EOleSysError do
-        GOpcItemServer.GroupCallbackError(E, Group, ccDa2WriteComplete)
+    SetLength(ClientHandles, ValidCount);
+    SetLength(Errors, ValidCount);
+    MasterError:= ProcessItems(Pointer(Errors), ClientHandles);
+    with Group do
+    if Assigned(FDataCallback) then
+    begin
+      try   {try except cf 1.14.4}
+        TServerImpl(FClientInfo).FAsyncCallbackThread.Invoke(AsyncCallbackOnWriteComplete);
+      except
+      end
     end
-  end
+  end;
 end;
 
 procedure TAsyncWriteTask.ProcessItem(Item: TGroupItemImpl; IndexSrc,
@@ -6384,25 +6597,28 @@ end;
 
 procedure TAsyncWriteVQTTask.Process;
 var
-  hClientItem: array of OPCHANDLE;
-  Errors: array of HRESULT;
-  MasterError: HRESULT;
+  AsyncCallbackOnWriteComplete: TAsyncCallbackOnWriteComplete;
 begin
-  SetLength(hClientItem, ValidCount);
-  SetLength(Errors, ValidCount);
-  MasterError:= ProcessItems(Pointer(Errors), hClientItem);
-  with Group do
-  if Assigned(FDataCallback) then
+  AsyncCallbackOnWriteComplete := TAsyncCallbackOnWriteComplete.Create;
+  AsyncCallbackOnWriteComplete.InterfaceCookie:= Group.FDataCallbackCookie;
+  AsyncCallbackOnWriteComplete.Group:= Group;
+  AsyncCallbackOnWriteComplete.hClientGroup:= Group.hClientGroup;
+  AsyncCallbackOnWriteComplete.TransactionID:= TransactionID;
+  AsyncCallbackOnWriteComplete.Count:= ValidCount;
+  with AsyncCallbackOnWriteComplete do
   begin
-    try   {try except cf 1.14.4}
-      FDataCallback.OnWriteComplete(TransactionID,
-          hClientGroup, MasterError, ValidCount,
-          Pointer(hClientItem), Pointer(Errors))
-    except
-      on E: EOleSysError do
-        GOpcItemServer.GroupCallbackError(E, Group, ccDa2WriteComplete)
+    SetLength(ClientHandles, ValidCount);
+    SetLength(Errors, ValidCount);
+    MasterError:= ProcessItems(Pointer(Errors), ClientHandles);
+    with Group do
+    if Assigned(FDataCallback) then
+    begin
+      try   {try except cf 1.14.4}
+        TServerImpl(FClientInfo).FAsyncCallbackThread.Invoke(AsyncCallbackOnWriteComplete);
+      except
+      end
     end
-  end
+  end;
 end;
 
 procedure TAsyncWriteVQTTask.ProcessItem(Item: TGroupItemImpl;
@@ -6418,43 +6634,48 @@ end;
 
 procedure TAsyncReadTask.Process;
 var
-  Errors: array of HRESULT;
-  IOP: TAsyncReadParam;
-  MasterError: HRESULT;
+  AsyncCallbackOnReadComplete: TAsyncCallbackOnReadComplete;
 begin
 {$IFDEF GLD}
   SendDebug(Format('AsyncIO2Read.Process dwCount = %d', [Count]));
 {$ENDIF}
-  SetLength(IOP.hClientItem, ValidCount);
-  SetLength(Errors, ValidCount);
-  SetLength(IOP.Qualities, ValidCount);
-  SetLength(IOP.Timestamps, ValidCount);
-  SetLength(IOP.Values, ValidCount);
-  MasterError:= ProcessItems(Pointer(Errors), IOP);
-  with Group do
-  if Assigned(FDataCallback) then
+  AsyncCallbackOnReadComplete := TAsyncCallbackOnReadComplete.Create;
+  AsyncCallbackOnReadComplete.InterfaceCookie:= Group.FDataCallbackCookie;
+  AsyncCallbackOnReadComplete.Group:= Group;
+  AsyncCallbackOnReadComplete.hClientGroup:= Group.hClientGroup;
+  AsyncCallbackOnReadComplete.TransactionID:= TransactionID;
+  AsyncCallbackOnReadComplete.Count:= ValidCount;
+  with AsyncCallbackOnReadComplete do
   begin
-    try   {try except cf 1.14.5}
-      FDataCallback.OnReadComplete(TransactionID,
-       hClientGroup, S_OK, MasterError, ValidCount,
-       Pointer(IOP.hClientItem), Pointer(IOP.Values), Pointer(IOP.Qualities),
-       Pointer(IOP.Timestamps), Pointer(Errors))
-    except
-      on E: EOleSysError do
-        GOpcItemServer.GroupCallbackError(E, Group, ccDa2ReadComplete)
-    end
+    SetLength(ClientHandles, ValidCount);
+    SetLength(Errors, ValidCount);
+    SetLength(Qualities, ValidCount);
+    SetLength(Timestamps, ValidCount);
+    SetLength(Values, ValidCount);
+    MasterQuality:= S_OK;
+    MasterError:= ProcessItems(Pointer(Errors), AsyncCallbackOnReadComplete);
+    with Group do
+    if Assigned(FDataCallback) then
+    begin
+      try   {try except cf 1.14.5}
+        TServerImpl(FClientInfo).FAsyncCallbackThread.Invoke(AsyncCallbackOnReadComplete);
+      except
+      end
+    end;
   end;
 end;
 
 procedure TAsyncReadTask.ProcessItem(Item: TGroupItemImpl; IndexSrc,
   IndexDst: Integer; var Data; var Status: HRESULT);
 var
-  IOP: TAsyncReadParam absolute Data;
+  AsyncCallbackOnReadComplete: TAsyncCallbackOnReadComplete absolute Data;
 begin
-  with GroupItem[IndexSrc] do
+  with GroupItem[IndexSrc], AsyncCallbackOnReadComplete do
   begin
-    IOP.hClientItem[IndexDst]:= FhClient;
-    GetItemValue(IOP.Values[IndexDst], IOP.Qualities[IndexDst], IOP.Timestamps[IndexDst]);
+    ClientHandles[IndexDst]:= FhClient;
+    GetItemValue(Values[IndexDst], Qualities[IndexDst], Timestamps[IndexDst]);
+    if (MasterQuality = S_OK) and (Qualities[IndexDst] and OPC_QUALITY_MASK <> OPC_QUALITY_GOOD) then
+      MasterQuality:= S_FALSE
   end;
 end;
 
@@ -6475,42 +6696,50 @@ end;
 
 procedure TAsyncReadMaxAgeTask.Process;
 var
-  Errors: array of HRESULT;
-  IOP: TAsyncReadMaxAgeParam;
-  MasterError: HRESULT;
+  AsyncCallbackOnReadComplete: TAsyncCallbackOnReadComplete;
 begin
 {$IFDEF GLD}
   SendDebug(Format('AsyncIO3ReadMaxAge.Process dwCount = %d', [Count]));
 {$ENDIF}
-  SetLength(IOP.hClientItem, ValidCount);
-  SetLength(Errors, ValidCount);
-  SetLength(IOP.Qualities, ValidCount);
-  SetLength(IOP.Timestamps, ValidCount);
-  SetLength(IOP.Values, ValidCount);
-  MasterError:= ProcessItems(Pointer(Errors), IOP);
-  with Group do
-  if Assigned(FDataCallback) then
+  AsyncCallbackOnReadComplete := TAsyncCallbackOnReadComplete.Create;
+  AsyncCallbackOnReadComplete.InterfaceCookie:= Group.FDataCallbackCookie;
+  AsyncCallbackOnReadComplete.Group:= Group;
+  AsyncCallbackOnReadComplete.hClientGroup:= Group.hClientGroup;
+  AsyncCallbackOnReadComplete.TransactionID:= TransactionID;
+  AsyncCallbackOnReadComplete.Count:= ValidCount;
+  with AsyncCallbackOnReadComplete do
   begin
-    try   {try except cf 1.14.5}
-      FDataCallback.OnReadComplete(TransactionID,
-       hClientGroup, S_OK, MasterError, ValidCount,
-       Pointer(IOP.hClientItem), Pointer(IOP.Values), Pointer(IOP.Qualities),
-       Pointer(IOP.Timestamps), Pointer(Errors))
-    except
-      on E: EOleSysError do
-        GOpcItemServer.GroupCallbackError(E, Group, ccDa2ReadComplete)
-    end
-  end
+    SetLength(ClientHandles, ValidCount);
+    SetLength(Errors, ValidCount);
+    SetLength(Qualities, ValidCount);
+    SetLength(Timestamps, ValidCount);
+    SetLength(Values, ValidCount);
+    MasterQuality:= S_OK;
+    MasterError:= ProcessItems(Pointer(Errors), AsyncCallbackOnReadComplete);
+    with Group do
+    if Assigned(FDataCallback) then
+    begin
+      try   {try except cf 1.14.5}
+        TServerImpl(FClientInfo).FAsyncCallbackThread.Invoke(AsyncCallbackOnReadComplete);
+      except
+      end
+    end;
+  end;
 end;
 
 procedure TAsyncReadMaxAgeTask.ProcessItem(Item: TGroupItemImpl; IndexSrc,
   IndexDst: Integer; var Data; var Status: HRESULT);
 var
-  IOP: TAsyncReadMaxAgeParam absolute Data;
+  AsyncCallbackOnReadComplete: TAsyncCallbackOnReadComplete absolute Data;
 begin
-  IOP.hClientItem[IndexDst]:= Item.FhClient;
-  Item.GetMaxAgeValue(MaxAge[IndexSrc], ActualTimestamp,
-    IOP.Values[IndexDst], IOP.Qualities[IndexDst], IOP.Timestamps[IndexDst]);
+  with GroupItem[IndexSrc], AsyncCallbackOnReadComplete do
+  begin
+    ClientHandles[IndexDst]:= FhClient;
+    GetMaxAgeValue(MaxAge[IndexSrc], ActualTimestamp,
+      Values[IndexDst], Qualities[IndexDst], Timestamps[IndexDst]);
+    if (MasterQuality = S_OK) and (Qualities[IndexDst] and OPC_QUALITY_MASK <> OPC_QUALITY_GOOD) then
+      MasterQuality:= S_FALSE
+  end;
 end;
 
 { TRefreshTask }
@@ -6754,7 +6983,7 @@ begin
        on EOpcError do
          wQuality:= OPC_QUALITY_BAD
      end;
-     if (Status = S_OK) and (wQuality <> OPC_QUALITY_GOOD) then
+     if (Status = S_OK) and (wQuality and OPC_QUALITY_MASK <> OPC_QUALITY_GOOD) then
        Status:= S_FALSE
    end;
    {note that any writes to the stream may alter the
