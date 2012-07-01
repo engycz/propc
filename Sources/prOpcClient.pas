@@ -1867,7 +1867,7 @@ begin
   FillChar(Result, SizeOf(Result), 0);
 
   ppServerStatus := nil;
-  OpcServer.GetStatus(ppServerStatus);
+  OpcCheck(OpcServer.GetStatus(ppServerStatus));
 
   Result.StartTime := FileTimeToDateTime(ppServerStatus.ftStartTime);
   Result.CurrentTime := FileTimeToDateTime(ppServerStatus.ftCurrentTime);

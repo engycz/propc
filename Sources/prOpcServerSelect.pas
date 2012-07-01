@@ -71,6 +71,7 @@ begin
 //        Caption:= SL[i].ProgID;
         Caption:= SL[i].VerIndProgID;
         SubItems.Add(SL[i].UserType);
+        Data := Pointer(i);
         dt:= SL[i].DaTypes;
         DAStr:= '';
         for j:= Low(TOpcDataAccessType) to High(TOpcDataAccessType) do
@@ -89,7 +90,7 @@ begin
     end;
     Result:= ShowModal = mrOK;
     if Result and (List.SelCount = 1) then
-      Client.ProgID:= List.Selected.Caption
+      Client.ProgID:= SL[Integer(List.Selected.Data)].ProgID
   except
     on E:EAbort do
     begin

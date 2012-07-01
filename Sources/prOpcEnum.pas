@@ -332,7 +332,6 @@ var
   PUserType: PWideChar;
   PProgID: PWideChar;
   PVerIndProgID: PWideChar;
-
 begin
   if IsLocalHost(Host) then
     List:= CreateComObject(CLSID_OPCServerList) as IOPCServerList2
