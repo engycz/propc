@@ -82,12 +82,13 @@ resourcestring
 const
   CLSID_StdGlobalInterfaceTable : TGUID = '{00000323-0000-0000-C000-000000000046}';
 
+var
+  cGIT : IGlobalInterfaceTable = nil;
+
 function GIT : IGlobalInterfaceTable;
-const
-  cGIT : IGlobalInterfaceTable = NIL;
 begin
-  if (cGIT = NIL) then
-    OleCheck(CoCreateInstance(CLSID_StdGlobalInterfaceTable, NIL, CLSCTX_ALL,
+  if (cGIT = nil) then
+    OleCheck(CoCreateInstance(CLSID_StdGlobalInterfaceTable, nil, CLSCTX_ALL,
       IGlobalInterfaceTable, cGIT));
   Result := cGIT;
 end;
