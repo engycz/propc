@@ -489,6 +489,9 @@ type
     procedure OnRemoveItem(Item: TGroupItemInfo); virtual;
     procedure OnItemValueChange(Item: TGroupItemInfo); virtual;    {cf 1.14.27}
 
+    procedure OnRegisterServer(const ClassID: TGUID); virtual;
+    procedure OnUnregisterServer(const ClassID: TGUID); virtual;
+
     procedure GroupCallbackError(Exception: EOleSysError; Group: TGroupInfo; Call: TGroupCallback); virtual; {cf 1.14.2} // Note: this function is called from different thread and Group should not exist if destroyed in main thread
     procedure ClientCallbackError(Exception: EOleSysError; Server: TClientInfo; Call: TClientCallback); virtual; {cf 1.14.2}
 
@@ -1820,11 +1823,13 @@ begin
   if Register then
   begin
     InstallBrowserKey;
-    InstallDA1BrowserKey
+    InstallDA1BrowserKey;
+    OpcItemServer.OnRegisterServer(ClassID);
   end else
   begin
     RemoveBrowserKey;
-    RemoveDA1BrowserKey
+    RemoveDA1BrowserKey;
+    OpcItemServer.OnUnregisterServer(ClassID);
   end
 end;
 
@@ -2267,6 +2272,13 @@ procedure TOpcItemServer.OnClientSetName(aServer: TClientInfo);
 begin
 end;
 
+procedure TOpcItemServer.OnRegisterServer(const ClassID: TGUID);
+begin
+end;
+
+procedure TOpcItemServer.OnUnregisterServer(const ClassID: TGUID);
+begin
+end;
 
 function TOpcItemServer.GetItemInfo(const ItemID: String; var AccessPath: String;
   var AccessRights: TAccessRights): Integer;
