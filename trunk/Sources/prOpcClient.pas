@@ -517,7 +517,8 @@ end;
 
 destructor TOpcGroup.Destroy;
 begin
-  Disconnect;
+  if IsConnected then
+   Disconnect;
   ClearUpdateList;
   FUpdateList.Free;
   FItems.Free;
