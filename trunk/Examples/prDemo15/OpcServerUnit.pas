@@ -1,8 +1,11 @@
 {------------------------------------------------------------}
 {                    prOpc Toolkit                           }
 { Copyright (c) 2000, 2001 Production Robots Engineering Ltd }
-{ mailto: prOpcKit@prel.co.uk                                }
-{ http://www.prel.co.uk                                      }
+{                                                            }
+{ mailto engycz@gmail.com                                    }
+{ http://code.google.com/p/propc/                            }
+{ original source mailto: prOpcKit@prel.co.uk                }
+{ original source http://www.prel.co.uk                      }
 {------------------------------------------------------------}
 unit OpcServerUnit;
 {this example implements a standard server without rtti. Instead of
