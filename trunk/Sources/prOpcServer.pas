@@ -2639,7 +2639,7 @@ begin
     i:= 0;
     while i < ItemCount do
     begin
-      TPointerList(elt)[i]:= StringToLPOLESTR(FStrings[FIndex]);
+      PointerArray(elt)[i]:= StringToLPOLESTR(FStrings[FIndex]);
       Inc(FIndex);
       Inc(i)
     end
