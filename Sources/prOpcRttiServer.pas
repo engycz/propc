@@ -104,7 +104,12 @@ resourcestring
   SSyntaxConflict = 'Cannot use comma for array syntax and path separator'; {cf 1.14.18}
 
 const
-  ValidTypeKinds = [tkInteger, tkEnumeration, tkFloat, tkString, tkLString, tkWString];
+{$IFDEF F_UString}
+  TypeStrings = [tkString, tkLString, tkWString, tkUString];
+{$ELSE}
+  TypeStrings = [tkString, tkLString, tkWString];
+{$ENDIF}
+  ValidTypeKinds = [tkInteger, tkEnumeration, tkFloat] + TypeStrings;
 
 type
   TRttiItemList = class(TStringList)
@@ -142,7 +147,11 @@ begin
         else
           Result:= VT_R8
       end;
-      tkString, tkLString, tkWString:
+{$IFDEF F_UString}
+        tkString, tkLString, tkWString, tkUString:
+{$ELSE}
+        tkString, tkLString, tkWString:
+{$ENDIF}
         Result:= VT_BSTR;
     else
       Result:= VT_EMPTY;

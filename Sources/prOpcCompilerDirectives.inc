@@ -19,42 +19,17 @@
   {$DEFINE NoMasks}
 {$ENDIF}
 
-{$IFDEF VER140}
-  {$DEFINE D6UP}
+{$DEFINE D6UP}
+
+// Test Delphi 5
+{$IFDEF VER130}
+  {$UNDEF D6UP}
 {$ENDIF}
 
-{$IFDEF VER150}
-  {$DEFINE D6UP}
-  {$DEFINE D7UP}
+{$IFDEF CONDITIONALEXPRESSIONS}
+  // Enable Unicode strings in RTTI
+  {$IF CompilerVersion >= 22.0}
+    {$DEFINE F_UString}
+  {$IFEND}
 {$ENDIF}
 
-{$IFDEF VER170}
-  {$DEFINE D6UP}
-  {$DEFINE D7UP}
-  {$DEFINE D9UP}
-{$ENDIF}
-
-{$IFDEF VER180}
-  {$DEFINE D6UP}
-  {$DEFINE D7UP}
-  {$DEFINE D9UP}
-  {$DEFINE D10UP}
-{$ENDIF}
-
-//this Delphi 2007 for Win32
-{$IFDEF VER185}
-  {$DEFINE D6UP}
-  {$DEFINE D7UP}
-  {$DEFINE D9UP}
-  {$DEFINE D10UP}
-  {$DEFINE D11UP}
-{$ENDIF}
-
-//CodeGear RAD Studio 2007
-{$IFDEF VER190}
-  {$DEFINE D6UP}
-  {$DEFINE D7UP}
-  {$DEFINE D9UP}
-  {$DEFINE D10UP}
-  {$DEFINE D11UP}
-{$ENDIF}
