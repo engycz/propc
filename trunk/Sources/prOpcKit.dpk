@@ -1,0 +1,44 @@
+package prOpcKit;
+
+{$R *.res}
+{$R prOpcKit.dcr}
+{$ALIGN 8}
+{$ASSERTIONS ON}
+{$BOOLEVAL OFF}
+{$DEBUGINFO ON}
+{$EXTENDEDSYNTAX ON}
+{$IMPORTEDDATA ON}
+{$IOCHECKS ON}
+{$LOCALSYMBOLS ON}
+{$LONGSTRINGS ON}
+{$OPENSTRINGS ON}
+{$OPTIMIZATION OFF}
+{$OVERFLOWCHECKS ON}
+{$RANGECHECKS ON}
+{$REFERENCEINFO OFF}
+{$SAFEDIVIDE OFF}
+{$STACKFRAMES OFF}
+{$TYPEDADDRESS OFF}
+{$VARSTRINGCHECKS ON}
+{$WRITEABLECONST ON}
+{$MINENUMSIZE 1}
+{$IMAGEBASE $400000}
+{$DESCRIPTION 'prOpcKit Package'}
+{$IMPLICITBUILD OFF}
+
+requires
+  rtl,
+  vcl;
+
+contains
+  prOpcComponents in 'prOpcComponents.pas',
+  prOpcBrowser in 'prOpcBrowser.pas',
+  prOpcClient in 'prOpcClient.pas',
+  prOpcComn in 'prOpcComn.pas',
+  prOpcDa in 'prOpcDa.pas',
+  prOpcEnum in 'prOpcEnum.pas',
+  prOpcError in 'prOpcError.pas',
+  prOpcTypes in 'prOpcTypes.pas',
+  prOpcUtils in 'prOpcUtils.pas';
+
+end.
