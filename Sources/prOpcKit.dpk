@@ -1,7 +1,7 @@
 package prOpcKit;
 
 {$R *.res}
-{$R prOpcKit.dcr}
+{$R 'prOpcKit.dcr'}
 {$ALIGN 8}
 {$ASSERTIONS ON}
 {$BOOLEVAL OFF}
@@ -28,10 +28,12 @@ package prOpcKit;
 
 requires
   rtl,
-  vcl;
+  vcl,
+  designide,
+  vclactnband,
+  vclx;
 
 contains
-  prOpcComponents in 'prOpcComponents.pas',
   prOpcBrowser in 'prOpcBrowser.pas',
   prOpcClient in 'prOpcClient.pas',
   prOpcComn in 'prOpcComn.pas',
@@ -39,6 +41,9 @@ contains
   prOpcEnum in 'prOpcEnum.pas',
   prOpcError in 'prOpcError.pas',
   prOpcTypes in 'prOpcTypes.pas',
-  prOpcUtils in 'prOpcUtils.pas';
+  prOpcUtils in 'prOpcUtils.pas',
+  prOpcKitDsgn in 'prOpcKitDsgn.pas',
+  prOpcServerSelect in 'prOpcServerSelect.pas' {ServerSelectDlg},
+  prOpcWizMain in 'prOpcWizMain.pas' {OpcServerForm};
 
 end.
