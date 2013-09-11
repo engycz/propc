@@ -1,3 +1,4 @@
+{------------------------------------------------------------}
 {The MIT License (MIT)
  prOpc Toolkit
  Copyright (c) 2000, 2001 Production Robots Engineering Ltd
@@ -19,6 +20,7 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.}
+{------------------------------------------------------------}
 {History
 
 1.14 01/04/02  New File

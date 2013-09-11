@@ -64,6 +64,7 @@ type
     FVarType: Integer;
     UpdateEvent : TSubscriptionEvent;
     EUInfo: IEUInfo;
+    ConnectionCount : Integer;
 
     constructor Create(VarType : Integer; aQualityGood : Boolean = True; aUnits : string = ''; aDescr : string = '');
     procedure SafeDestroy;
@@ -107,6 +108,8 @@ type
     function CheckItemHandle(ItemHandle: TItemHandle) : Boolean;
     function SubscribeToItem(ItemHandle: TItemHandle; UpdateEvent: TSubscriptionEvent): Boolean; override;
     procedure UnsubscribeToItem(ItemHandle: TItemHandle); override;
+    procedure OnAddItem(Item: TGroupItemInfo); override;
+    procedure OnRemoveItem(Item: TGroupItemInfo); override;
     function GetExtendedItemInfo(const ItemID: String; var AccessPath: String;
       var AccessRights: TAccessRights; var EUInfo: IEUInfo;
       var ItemProperties: IItemProperties): Integer; override;
@@ -374,6 +377,18 @@ begin
          Free;
       end;
    end;
+end;
+
+procedure TOPCDataItemServer.OnAddItem(Item: TGroupItemInfo);
+begin
+  if CheckItemHandle(Item.ItemHandle) then
+   Inc(TOPCDataItem(Item.ItemHandle).ConnectionCount);
+end;
+
+procedure TOPCDataItemServer.OnRemoveItem(Item: TGroupItemInfo);
+begin
+  if CheckItemHandle(Item.ItemHandle) then
+   Dec(TOPCDataItem(Item.ItemHandle).ConnectionCount);
 end;
 
 function TOPCDataItemServer.GetExtendedItemInfo(const ItemID: String;
