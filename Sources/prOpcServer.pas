@@ -2594,7 +2594,7 @@ var
       case BrowseType of
         OPC_BRANCH:
         if (c is TItemIdList) and
-          ItemServer.FilterFunction(FilterCriterion, Ar, 0, c.Name, [], 0) then
+          ItemServer.FilterFunction(FilterCriterion, [], 0, c.Name, [], 0) then
           FStrings.Add(c.Name);
         OPC_LEAF:
         if c is TNamespaceItem then
@@ -3621,23 +3621,6 @@ begin
   end
 end;
 
-{calling SysAllocString causes that odd
-'break in ntdll.dll problem. V. strange}
-
-function MySysAllocString(const S: WideString): POleStr;
-var
-  BufSize: Integer;
-begin
-  BufSize:= (Length(S) + 1) * SizeOf(WideChar);
-  Result:= CoTaskMemAlloc(BufSize);
-  if Result = nil then
-    raise EOpcError.Create(E_OUTOFMEMORY);
-  if S = '' then
-    Result^:= #0
-  else
-    Move(Pointer(S)^, Result^, BufSize)
-end;
-
 {cf 1.14.7}
 function TServerImpl.GetItemID(szItemDataID: POleStr;
   out szItemID: POleStr): HResult;
@@ -3651,10 +3634,8 @@ begin
     if szItemDataId <> nil then
     begin
       if szItemDataId^ = #0 then
-      begin
-        szItemID:= CoTaskMemAlloc(SizeOf(WideChar));
-        szItemID^:= #0
-      end else
+        szItemID:= StringToLPOLESTR(FBrowsePos.Path)
+      else
       begin
         with GOpcItemServer do
         begin
@@ -3670,12 +3651,12 @@ begin
                 Node:= FRootNode.Find(ItemDataId);
               if not Assigned(Node) then
                 raise EOpcError.Create(E_INVALIDARG);
-              szItemId:= MySysAllocString(Node.Path)
+              szItemId:= StringToLPOLESTR(Node.Path)
             end else
             begin
               if FRootNode.Find(szItemDataId) = nil then
                 raise EOpcError.Create(E_INVALIDARG);
-              szItemID:= MySysAllocString(szItemDataID);
+              szItemID:= StringToLPOLESTR(szItemDataID);
               Result:= S_OK
             end
           finally
@@ -4150,7 +4131,7 @@ begin
     pceltFetched^:= ItemCount;
   if ItemCount > 0 then
   begin
-    ppItemArray:= CoTaskMemAlloc(SizeOf(OPCITEMATTRIBUTES)*ItemCount);
+    ppItemArray:= CheckAllocation(SizeOf(OPCITEMATTRIBUTES)*ItemCount);
     i:= 0;
     while i < ItemCount do
     begin
