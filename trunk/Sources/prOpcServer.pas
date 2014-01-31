@@ -885,7 +885,7 @@ type
     procedure InvalidateCache; {load cache from device and mark for update. This should be done
                                 when the item is activated - either at group or item level}
     function UpdateCache(const Value: OleVariant; Quality: Word; Timestamp: TFileTime): Boolean;
-    function Tick: Boolean;  {returns true if item needs sending to client}
+    function Tick(ReadValue: Boolean): Boolean;  {returns true if item needs sending to client}
   public
     function Group: TGroupInfo; override;
     function LastUpdateTime: TDateTime; override;
@@ -4555,7 +4555,7 @@ begin
       for i:= 0 to Count - 1 do
       with TGroupItemImpl(ActiveList[i]) do
       begin
-        Tick; // Clear cache changed
+        Tick(Source = OPC_DS_DEVICE); // Clear cache changed
         ClientHandles[i]:= FhClient;
         try
           if Source = OPC_DS_DEVICE then
@@ -4608,7 +4608,6 @@ begin
       for i:= 0 to Count - 1 do
       with TGroupItemImpl(ActiveList[i]) do
       begin
-        Tick; // Clear cache changed
         ClientHandles[i]:= FhClient;
         try
           GetMaxAgeValue(MaxAge, ActualTimestamp, Values[i], Qualities[i], Timestamps[i]);
@@ -5344,7 +5343,7 @@ begin
       for i:= 0 to FItemList.Count - 1 do
       begin
         gi:= FItemList[i];
-        if gi.Tick then
+        if gi.Tick(True) then
           List.Add(gi)
       end;
       if List.Count > 0 then
@@ -6262,7 +6261,7 @@ begin
   end
 end;
 
-function TGroupItemImpl.Tick: Boolean;
+function TGroupItemImpl.Tick(ReadValue: Boolean): Boolean;
 var
   ItemVal: OleVariant;
   ItemQuality: Word;
@@ -6277,7 +6276,7 @@ begin
     Result:= true;
     CacheUpdated:= false
   end else
-  if not ServerItem.Subscribed then
+  if not ServerItem.Subscribed and ReadValue then
   begin
     ServerItem.GetItemVQT(ItemVal, ItemQuality, ItemTimestamp);
     Result:= UpdateCache(ItemVal, ItemQuality, ItemTimestamp)
