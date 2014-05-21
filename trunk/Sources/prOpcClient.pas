@@ -150,6 +150,7 @@ type
     FUpdating: TUpdateType;
     FOnDataChange: TDataChangeEvent;
     FOnWriteComplete: TWriteCompleteEvent;
+    FLocaleID: LCID;
     procedure SetItems(Value: TStrings);
     function GetItems: TStrings;
     procedure SetUpdateRate(Value: Cardinal);
@@ -228,6 +229,7 @@ type
     property ItemTimestamp[i: Integer]: TDateTime read GetItemTimestamp;
   published
     property Name: String read FName write SetName;
+    property LocaleID : LCID read FLocaleID write FLocaleID;
     property UpdateRate: Cardinal read FUpdateRate write SetUpdateRate;
     property Active: Boolean read FActive write SetActive;
     property PercentDeadband: Single read FPercentDeadband write SetPercentDeadband;
@@ -530,7 +532,8 @@ begin
   FItems:= TStringList.Create;
   FItems.Sorted:= Client.SortedItemLists;            {cf 1.14.1}
   FItems.Duplicates:= dupError;     {no effect on Unsorted list}
-  FUpdateList:= TList.Create
+  FUpdateList:= TList.Create;
+  FLocaleID:= LOCALE_SYSTEM_DEFAULT;
 end;
 
 destructor TOpcGroup.Destroy;
@@ -660,7 +663,7 @@ begin
     pPercentDeadband:= @FPercentDeadband;
   WideName:= FName;
   Res:= Server.AddGroup(PWideChar(WideName), FActive, FUpdateRate,
-    Integer(Self), nil, pPercentDeadband, GetUserDefaultLCID, FServerHandle,
+    Integer(Self), nil, pPercentDeadband, LocaleID, FServerHandle,
       FUpdateRate, IUnknown, FOpcGroup);
   try
     if (Res <> OPC_S_UNSUPPORTEDRATE) then
