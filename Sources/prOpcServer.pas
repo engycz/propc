@@ -3445,10 +3445,10 @@ begin
     end;
 
     if szItemID^ = #0 then
-     List := GOpcItemServer.FRootNode
+     List := GOpcItemServer.RootNode
     else
      begin
-       NSNode := GOpcItemServer.FRootNode.Find(szItemID);
+       NSNode := GOpcItemServer.RootNode.Find(szItemID);
        if NSNode = nil then
          raise EOpcError.Create(OPC_E_UNKNOWNITEMID);
        if NSNode is TItemIdList then
