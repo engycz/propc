@@ -119,6 +119,7 @@ type
     procedure SetItemQuality(ItemHandle: TItemHandle; const Quality: Word); override;
     procedure SetItemTimestamp(ItemHandle: TItemHandle; const Timestamp: TFileTime); override;
     procedure ItemDestroyed; virtual;
+    function OnItemNotFound(const ItemID: String; var AccessPath: String) : TNamespaceNode; virtual;
   public
     constructor Create;
     destructor Destroy; override;
@@ -348,7 +349,7 @@ function TOPCDataItemServer.CheckItemHandle(
   ItemHandle: TItemHandle): Boolean;
 begin
   if (ItemHandle <> 0) and
-     (TObject(ItemHandle).ClassType = TOPCDataItem) then
+     TObject(ItemHandle).InheritsFrom(TOPCDataItem) then
    Result := True
   else
    Result := False;
@@ -399,6 +400,9 @@ var
   OPCItem : TOPCDataItem;
 begin
   Node := RootNode.Find(ItemID);
+
+  if Node = nil then
+   Node := OnItemNotFound(ItemID, AccessPath);
 
   if Node <> nil then
    begin
@@ -469,6 +473,11 @@ end;
 
 procedure TOPCDataItemServer.ItemDestroyed;
 begin
+end;
+
+function TOPCDataItemServer.OnItemNotFound(const ItemID: String; var AccessPath: String) : TNamespaceNode;
+begin
+  Result := nil;
 end;
 
 end.
