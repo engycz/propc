@@ -825,7 +825,7 @@ type
   server items}
 
   TServerItemList = class(TPrivateItemList)
-    FCritSect, FRefListCritSect: TRtlCriticalSection;
+    FCritSect, FRefListCritSect, FCacheUpdateCritSect: TRtlCriticalSection;
     FList: TStringList;
     constructor Create;
     destructor Destroy; override;
@@ -862,6 +862,7 @@ type
   {Server Handle passed back to client is a pointer to TGroupItem}
   TGroupItemImpl = class(TGroupItemInfo)
   private
+    FCritSect: TRtlCriticalSection;
     Owner: TGroupImpl;
     ServerItem: TServerItem;
     CacheUpdated: Boolean; {by subscription}
@@ -885,6 +886,7 @@ type
     procedure InvalidateCache; {load cache from device and mark for update. This should be done
                                 when the item is activated - either at group or item level}
     function UpdateCache(const Value: OleVariant; Quality: Word; Timestamp: TFileTime): Boolean;
+    procedure UpdateCacheData(const Value: OleVariant; Quality: Word; Timestamp: TFileTime);
     function Tick(ReadValue: Boolean): Boolean;  {returns true if item needs sending to client}
   public
     function Group: TGroupInfo; override;
@@ -5812,9 +5814,15 @@ procedure TServerItemRef.GetCacheVQT(var Result: OleVariant;
 begin
   if (AccessRights and OPC_READABLE) = 0 then
     raise EOpcError.Create(OPC_E_BADRIGHTS);
-  Result:= CacheValue;
-  Quality:= CacheQuality;
-  Timestamp:= CacheTimestamp;
+
+  EnterCriticalSection(ServerItemList.FCacheUpdateCritSect);
+  try
+    Result:= CacheValue;
+    Quality:= CacheQuality;
+    Timestamp:= CacheTimestamp;
+  finally
+    LeaveCriticalSection(ServerItemList.FCacheUpdateCritSect);
+  end;
 end;
 
 procedure TServerItemRef.GetItemVQT(var Result: OleVariant;
@@ -5825,9 +5833,14 @@ begin
   Quality:= OPC_QUALITY_GOOD;
   Result:= GOpcItemServer.GetItemVQT(ItemHandle, Quality, Timestamp);
 
-  CacheValue:= Result;
-  CacheQuality:= Quality;
-  CacheTimestamp:= Timestamp;
+  EnterCriticalSection(ServerItemList.FCacheUpdateCritSect);
+  try
+    CacheValue:= Result;
+    CacheQuality:= Quality;
+    CacheTimestamp:= Timestamp;
+  finally
+    LeaveCriticalSection(ServerItemList.FCacheUpdateCritSect);
+  end;
 end;
 
 procedure TServerItemRef.ReleaseNonGroupReference;
@@ -5904,7 +5917,7 @@ begin
   try
     Add(GroupItem)
   finally
-    UnlockRefList
+//    UnlockRefList Unlocking is done in TGroupItemImpl.Create and TGroupItemImpl.CreateClone
   end
 end;
 
@@ -5957,11 +5970,16 @@ var
 begin
   with LockRefList do
   try
-    CacheValue := Value;
-    CacheQuality := Quality;
-    if Int64(TimeStamp) = Int64(TimestampNotSet) then
-      GOpcItemServer.GetTimestamp(Timestamp);
-    CacheTimestamp := TimeStamp;
+    EnterCriticalSection(Owner.FCacheUpdateCritSect);
+    try
+      CacheValue := Value;
+      CacheQuality := Quality;
+      if Int64(TimeStamp) = Int64(TimestampNotSet) then
+        GOpcItemServer.GetTimestamp(Timestamp);
+      CacheTimestamp := TimeStamp;
+    finally
+      LeaveCriticalSection(Owner.FCacheUpdateCritSect);
+    end;
     for i:= 0 to Count - 1 do
       TGroupItemImpl(Items[i]).ItemCallback(Value, Quality, Timestamp)
   finally
@@ -6002,7 +6020,6 @@ begin
   LeaveCriticalSection(Owner.FRefListCritSect)
 end;
 
-
 { TServerItemList }
 
 function TServerItemList.AddServerItem(GroupItem: TGroupItemImpl; const ItemID: string): TServerItem;
@@ -6039,6 +6056,7 @@ begin
   FList:= TStringList.Create;
   InitializeCriticalSection(FCritSect);
   InitializeCriticalSection(FRefListCritSect);
+  InitializeCriticalSection(FCacheUpdateCritSect);
   FList.Sorted:= true;
   FList.Duplicates:= dupError
 end;
@@ -6069,6 +6087,7 @@ begin
   end;
   DeleteCriticalSection(FCritSect);
   DeleteCriticalSection(FRefListCritSect);
+  DeleteCriticalSection(FCacheUpdateCritSect);
   inherited Destroy
 end;
 
@@ -6138,34 +6157,41 @@ var
   ItemID: String;
 begin
   inherited Create;
+  InitializeCriticalSection(FCritSect);
   FillChar(ItemResult, SizeOf(ItemResult), 0);
   InitItemID(ItemDef, ItemID);
   ServerItem:= ServerItemList.AddServerItem(Self, ItemID);
-  Owner:= aOwner;
-  FhClient:= ItemDef.hClient;
-  CheckRequestedVarType(ItemDef.vtRequestedDataType);
-  FRequestedDataType:= ItemDef.vtRequestedDataType;
-  SetActive(ItemDef.bActive);
-  {get results}
-  with ItemResult do
-  begin
-    hServer:= OPCHANDLE(Self);
-    vtCanonicalDataType:= ServerItem.CanonicalDataType;
-    dwAccessRights:= ServerItem.AccessRights
+  try
+    Owner:= aOwner;
+    FhClient:= ItemDef.hClient;
+    CheckRequestedVarType(ItemDef.vtRequestedDataType);
+    FRequestedDataType:= ItemDef.vtRequestedDataType;
+    SetActive(ItemDef.bActive);
+    {get results}
+    with ItemResult do
+    begin
+      hServer:= OPCHANDLE(Self);
+      vtCanonicalDataType:= ServerItem.CanonicalDataType;
+      dwAccessRights:= ServerItem.AccessRights
+    end;
+    {notify in main thread}
+    SendMessage(OpcWindow, CM_NOTIFICATION, nfAddItem, Integer(Self));
+    Include(GroupItemState, gisNotified); {cf 1.14.23}
+  finally
+    ServerItem.UnlockRefList;
   end;
-  {notify in main thread}
-  SendMessage(OpcWindow, CM_NOTIFICATION, nfAddItem, Integer(Self));
-  Include(GroupItemState, gisNotified) {cf 1.14.23}
 end;
 
 constructor TGroupItemImpl.CreateClone(aOwner: TGroupImpl; Source: TGroupItemImpl);
 begin
   inherited Create;
+  InitializeCriticalSection(FCritSect);
   Owner:= aOwner;
   FhClient:= Source.FhClient;
   FRequestedDataType:= Source.FRequestedDataType;
   ServerItem:= Source.ServerItem;
   ServerItem.AddRef(Self);
+  ServerItem.UnlockRefList;
   SetActive(Source.Active)  {cf 1.01.13}
 end;
 
@@ -6179,6 +6205,7 @@ begin
   end;
   if Assigned(ServerItem) then
     ServerItem.ReleaseRef(Self);
+  DeleteCriticalSection(FCritSect);
   inherited Destroy
 end;
 
@@ -6187,9 +6214,15 @@ procedure TGroupItemImpl.GetCacheValue(var Result: OleVariant;
 var
   Res: HRESULT;
 begin
-  Result:= CacheValue;
-  Quality:= CacheQuality;
-  Timestamp:= CacheTimestamp;
+  EnterCriticalSection(FCritSect);
+  try
+    Result:= CacheValue;
+    Quality:= CacheQuality;
+    Timestamp:= CacheTimestamp;
+  finally
+    LeaveCriticalSection(FCritSect);
+  end;
+
   if (FRequestedDataType <> VT_EMPTY) and
      (FRequestedDataType <> ServerItem.CanonicalDataType) then {1.10.3}
   begin
@@ -6222,9 +6255,7 @@ var
   Res: HRESULT;
 begin
   ServerItem.GetItemVQT(Result, Quality, Timestamp);
-  CacheValue:= Result;
-  CacheQuality:= Quality;
-  CacheTimestamp:= Timestamp;
+  UpdateCacheData(Result, Quality, Timestamp);
   if (FRequestedDataType <> VT_EMPTY) and
      (FRequestedDataType <> ServerItem.CanonicalDataType) then {1.10.3}
   begin
@@ -6235,8 +6266,13 @@ begin
 end;
 
 procedure TGroupItemImpl.InvalidateCache;
+var
+  Value: OleVariant;
+  Quality: Word;
+  Time: TFileTime;
 begin
-  ServerItem.GetItemVQT(CacheValue, CacheQuality, CacheTimestamp);
+  ServerItem.GetItemVQT(Value, Quality, Time);
+  UpdateCacheData(Value, Quality, Time);
   CacheUpdated:= true
 end;
 
@@ -6333,11 +6369,21 @@ begin
            ValueChanged;
   if Result then  {cf 1.13.14}
   begin
+    UpdateCacheData(Value, Quality, Timestamp);
+    GOpcItemServer.OnItemValueChange(Self)
+  end
+end;
+
+procedure TGroupItemImpl.UpdateCacheData(const Value: OleVariant; Quality: Word; Timestamp: TFileTime);
+begin
+  EnterCriticalSection(FCritSect);
+  try
     CacheValue:= Value;
     CacheQuality:= Quality;
     CacheTimestamp:= Timestamp;
-    GOpcItemServer.OnItemValueChange(Self)
-  end
+  finally
+    LeaveCriticalSection(FCritSect);
+  end;
 end;
 
 function TGroupItemImpl.LastUpdateTime: TDateTime;
@@ -6350,7 +6396,12 @@ end;
 
 function TGroupItemImpl.LastUpdateValue: OleVariant;
 begin
-  Result:= CacheValue
+  EnterCriticalSection(FCritSect);
+  try
+    Result:= CacheValue
+  finally
+    LeaveCriticalSection(FCritSect);
+  end;
 end;
 
 function TGroupItemImpl.Group: TGroupInfo;

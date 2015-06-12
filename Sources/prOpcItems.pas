@@ -26,7 +26,7 @@ unit prOpcItems;
 
 interface
 
-uses Windows, SysUtils, ActiveX, Variants,
+uses Windows, SysUtils, ActiveX, Variants, SyncObjs,
      prOpcError, prOpcDa, prOpcTypes, prOpcClasses, prOpcServer;
 
 type
@@ -42,6 +42,7 @@ type
   TOPCSetTimestamp = function (Sender : TOPCDataItem; Timestamp : TFileTime) : Boolean of object;
   TOPCDataItem = class(TObject)
   private
+    CS: TCriticalSection;
     FValue: OleVariant;
     FQuality : Word;
     FTimestamp: TFileTime;
@@ -53,7 +54,7 @@ type
     procedure SetValue(const Value: OleVariant);
     procedure SetQualityGood(const Value: Boolean);
     procedure SetQuality(const Value: Word);
-    procedure InternalSetVQT(aValue: Variant; aQuality: Word; aTimeStamp: TFileTime);
+    procedure InternalSetVQT(aValue: OleVariant; aQuality: Word; aTimeStamp: TFileTime);
     function GetVQT: TVQT;
     procedure SetVQT(const Value: TVQT);
     procedure UpdateValue;
@@ -67,6 +68,7 @@ type
     ConnectionCount : Integer;
 
     constructor Create(VarType : Integer; aQualityGood : Boolean = True; aUnits : string = ''; aDescr : string = '');
+    destructor Destroy; override;
     procedure SafeDestroy;
     function AccessRights: TAccessRights;
     function GetItemProperties: TItemProperties;
@@ -186,6 +188,7 @@ end;
 constructor TOPCDataItem.Create(VarType: Integer; aQualityGood : Boolean = True; aUnits : string = ''; aDescr : string = '');
 begin
   inherited Create;
+  CS := TCriticalSection.Create;
   QualityGood := aQualityGood;
   GetSystemTimeAsFileTime(FTimestamp);
   Self.FVarType := VarType;
@@ -196,6 +199,12 @@ begin
 
   Units := aUnits;
   Descr := aDescr;
+end;
+
+destructor TOPCDataItem.Destroy;
+begin
+  CS.Free;
+  inherited;
 end;
 
 procedure TOPCDataItem.SafeDestroy;
@@ -249,7 +258,7 @@ begin
   InternalSetVQT(Value, FQuality, TimestampNotSet);
 end;
 
-procedure TOPCDataItem.InternalSetVQT(aValue: Variant; aQuality: Word;
+procedure TOPCDataItem.InternalSetVQT(aValue: OleVariant; aQuality: Word;
   aTimeStamp: TFileTime);
 var
   NeedUpdate : Boolean;
@@ -284,8 +293,13 @@ end;
 
 procedure TOPCDataItem.UpdateValue;
 begin
-  if Assigned(UpdateEvent) then
-   UpdateEvent(FValue, FQuality, FTimestamp);
+  CS.Enter;
+  try
+    if Assigned(UpdateEvent) then
+     UpdateEvent(FValue, FQuality, FTimestamp);
+  finally
+    CS.Leave;
+  end;
 end;
 
 { TItemPropertyStatic }
@@ -373,7 +387,10 @@ begin
    begin
      with TOPCDataItem(ItemHandle) do
       begin
+        CS.Enter;
         UpdateEvent := nil;
+        CS.Leave;
+
         if DestroyScheduled then
          Free;
       end;
