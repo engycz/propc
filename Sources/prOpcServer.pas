@@ -3435,7 +3435,8 @@ begin
   try
     TestParamRange(dwBrowseFilter, OPC_BROWSE_FILTER_ALL, OPC_BROWSE_FILTER_ITEMS);
     try
-      if pszContinuationPoint^ <> #0 then
+      if (pszContinuationPoint  <> nil) and
+         (pszContinuationPoint^ <> #0) then
       begin
         StartI := StrToInt(pszContinuationPoint);
         FreeAndNull(pszContinuationPoint);
